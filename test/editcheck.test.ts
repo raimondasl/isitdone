@@ -49,7 +49,12 @@ describe('checkEditedFile', () => {
   });
 
   it('normalises paths', () => {
-    expect(toRepoPath('/repo', '/repo/src/a.test.ts')).toBe('src/a.test.ts');
-    expect(toRepoPath('C:\\repo', 'C:\\repo\\src\\a.test.ts')).toBe('src/a.test.ts');
+    if (process.platform === 'win32') {
+      expect(toRepoPath('C:\\repo', 'C:\\repo\\src\\a.test.ts')).toBe('src/a.test.ts');
+      expect(toRepoPath('C:\\repo', 'src\\a.test.ts')).toBe('src/a.test.ts');
+    } else {
+      expect(toRepoPath('/repo', '/repo/src/a.test.ts')).toBe('src/a.test.ts');
+      expect(toRepoPath('/repo', 'src/a.test.ts')).toBe('src/a.test.ts');
+    }
   });
 });
