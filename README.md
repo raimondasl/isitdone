@@ -6,7 +6,7 @@
 
 *Rendered from a real run (`npm run demo`): the agent lines are narration; the hook and CLI output are captured as-is, with only the temporary path shortened.*
 
-`isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor and Gemini CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, scans the diff for weakened tests, and refuses the stop until they pass. It also tells the agent mid-turn when an edit just weakened a test, runs the same verification on pull requests as a GitHub Action, and leaves a git-bound receipt you can paste into a PR.
+`isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor, Gemini CLI, GitHub Copilot CLI, Qwen Code, Goose, Factory Droid, Devin, Augment, OpenCode and Junie CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, scans the diff for weakened tests, and refuses the stop until they pass. It also tells the agent mid-turn when an edit just weakened a test, runs the same verification on pull requests as a GitHub Action, and leaves a git-bound receipt you can paste into a PR.
 
 ```
 npx isitdone init
@@ -73,7 +73,7 @@ Edit one more file and the receipt goes **STALE** until the checks run again. A 
 
 ## How often does this actually happen?
 
-Measure it on your own machine. `isitdone history` reads the Claude Code (`~/.claude/projects`) and Codex CLI (`~/.codex/sessions`, both the legacy and the paginated rollout formats) transcripts already on disk, finds every turn where the agent edited files and then claimed completion, and checks whether a test command actually passed after the last edit. Nothing leaves your machine; only counts are printed.
+Measure it on your own machine. `isitdone history` reads the transcripts already on disk: Claude Code (`~/.claude/projects`), Codex CLI (`~/.codex/sessions`: legacy, paginated and pre-0.40 rollouts, honouring `/undo` rollbacks), Gemini CLI (`~/.gemini/tmp/<project>/chats`, both the `.json` and the 0.39+ `.jsonl` layouts), Qwen Code (`~/.qwen/projects/<cwd>/chats`) and Cursor (the IDE's `state.vscdb` bubble store, opened read-only in place, which needs Node 22.13+ or 24 for `node:sqlite`; on Node 20 the `agent-transcripts` JSONL is read instead, which carries no exit codes, and the report says so). It finds every turn where the agent edited files and then claimed completion, and checks whether a test command actually passed after the last edit. Nothing leaves your machine; only counts are printed.
 
 ```
 $ npx isitdone history
@@ -100,9 +100,17 @@ One command per host. Run it inside the repository.
 | Codex CLI | `npx isitdone init --agent codex` | `.codex/hooks.json` (Stop), then run `/hooks` in Codex and trust it |
 | Cursor | `npx isitdone init --agent cursor` | `.cursor/hooks.json` (stop) |
 | Gemini CLI | `npx isitdone init --agent gemini` | `.gemini/settings.json` (AfterAgent) |
-| Everything | `npx isitdone init --agent all` | all of the above |
+| GitHub Copilot CLI | `npx isitdone init --agent copilot` | `.github/hooks/isitdone.json` (agentStop); restart Copilot |
+| Qwen Code | `npx isitdone init --agent qwen` | `.qwen/settings.json` (Stop) |
+| Goose | `npx isitdone init --agent goose` | `.agents/plugins/isitdone/hooks/hooks.json` (Stop) |
+| Factory Droid | `npx isitdone init --agent droid` | `.factory/hooks.json` (Stop) |
+| Devin | `npx isitdone init --agent devin` | `.devin/hooks.v1.json` (Stop); skipped when the Claude Code hook is present, since Devin loads that too |
+| Augment (Auggie) | `npx isitdone init --agent augment` | `.augment/settings.json` (Stop) |
+| OpenCode | `npx isitdone init --agent opencode` | `.opencode/plugins/isitdone.js` (a plugin: OpenCode has no blocking hook, so failed checks come back as a visible `[isitdone]` follow-up message in the same session) |
+| Junie CLI (early access) | `npx isitdone init --agent junie --user` | `~/.junie/config.json` (Stop) |
+| Everything | `npx isitdone init --agent all` | all of the above that apply to the repo |
 
-`init` detects the checks, writes the Stop hook and (for Claude Code, Codex and Gemini CLI) a warn-only post-edit hook, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks:
+`init` detects the checks, writes the Stop hook and (for Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode) a warn-only post-edit hook, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks:
 
 ```
 $ npx isitdone init
@@ -141,7 +149,7 @@ npx isitdone update --check  # only reports whether a newer release exists
 
 ## Mid-turn warnings
 
-The Stop hook is the gate; the post-edit hook is the nudge. On Claude Code, Codex and Gemini CLI, `init` also registers a hook that runs after every `Edit`/`Write` (Codex: `apply_patch`, Gemini: `write_file`/`replace`). It scans just that file against `HEAD` (so it sees every uncommitted change to the file, not only the lines this edit touched) and, when the tests got weaker, adds a short factual note next to the tool result:
+The Stop hook is the gate; the post-edit hook is the nudge. On Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode, `init` also registers a hook that runs after every `Edit`/`Write` (Codex and Devin: `apply_patch`, Gemini and Qwen: `write_file`/`replace`, OpenCode: `edit`/`write`/`apply_patch`). It scans just that file against `HEAD` (so it sees every uncommitted change to the file, not only the lines this edit touched) and, when the tests got weaker, adds a short factual note next to the tool result:
 
 ```
 isitdone: after your edit, src/auth.test.ts has weaker tests than HEAD (Tests 4 -> 4   Assertions 6 -> 4   Skipped 0 -> 1):
@@ -175,11 +183,11 @@ It runs the repo's checks, scans the diff against the PR base for weakened tests
 ## How it decides
 
 1. **Detect.** Reads `package.json` scripts (`test`, `typecheck`, `lint`, `build`; npm, pnpm, yarn, bun, deno), `pyproject.toml`/`pytest.ini`/`requirements.txt` (pytest, ruff, flake8, mypy, pyright; uv/poetry/pipenv runners), `go.mod` (`go vet`, `go test ./...`), `Cargo.toml` (`cargo check`, `cargo test`), .NET solutions, Gradle/Maven, and `Makefile` targets. Anything can be overridden in `.isitdone.json`.
-2. **Gate on the claim.** The default `claim-gated` profile runs the fast *lite* checks (typecheck, lint) on every stop, and the *full* checks (tests, build) only when the agent's final message contains a completion claim: "tests pass", "done", "implemented", "verified", "ready for review", and so on. A question or a progress update does not trigger a two-minute test run. Hosts that do not pass the final message (Cursor) get the full profile, cached per tree.
+2. **Gate on the claim.** The default `claim-gated` profile runs the fast *lite* checks (typecheck, lint) on every stop, and the *full* checks (tests, build) only when the agent's final message contains a completion claim: "tests pass", "done", "implemented", "verified", "ready for review", and so on. A question or a progress update does not trigger a two-minute test run. Hosts that do not pass the final message (Cursor, Copilot CLI, Factory Droid, Devin, Junie) get the full profile, cached per tree.
 3. **Cache per tree.** The working tree (tracked changes *and* untracked files, including the contents of submodules and embedded repositories) is hashed with a temporary git index, without writing any blob into `.git/objects`. A PASS receipt for the same tree hash and the same check configuration is reused; nothing runs twice for nothing.
 4. **Run and decide.** Checks run in a fresh subprocess with `CI=true`, per-check timeouts, and the last 30 lines captured. If anything fails, the hook returns the host's block shape with a bounded, plain-text reason quoting the claim and the failing output. If everything passes, the receipt is written and the agent may stop.
-5. **Scan the diff for weakened tests.** Deleted test files, new `.skip`/`.only`/`xfail`, dropped assertions, matchers downgraded (`toStrictEqual` to `toEqual`, `toThrow("msg")` to `toThrow()`, `assertEqual` to `assertTrue`), widened tolerances, empty `catch`/`except: pass`, and neutered configuration (`|| true`, `--passWithNoTests`, `continue-on-error`, `testPathIgnorePatterns`, removed CI test steps). JS/TS, Python and Go. Findings are reported with a before/after line (`Tests 47 -> 44   Assertions 112 -> 104   Skipped 0 -> 1`) and recorded in the receipt; with `"integrity": "strict"` (or `--strict`) high/critical findings block the stop even when the checks pass. Suppress a line with `// isitdone: allow <reason>`; suppressions are reported, never hidden, and `--ci` treats new ones as findings.
-6. **Never loop forever.** The hook honours each host's `stop_hook_active` / `loop_count`, counts its own attempts per session (default cap 3), and after the cap lets the agent stop with a visible warning. Malformed stdin, a broken config, or an internal error always allow the stop: `isitdone` must never brick the agent.
+5. **Scan the diff for weakened tests.** Deleted test files, new `.skip`/`.only`/`xfail`, dropped assertions, matchers downgraded (`toStrictEqual` to `toEqual`, `toThrow("msg")` to `toThrow()`, `assertEqual` to `assertTrue`), widened tolerances, empty `catch`/`except: pass`, and neutered configuration (`|| true`, `--passWithNoTests`, `continue-on-error`, `testPathIgnorePatterns`, `-DskipTests`, `ignoreFailures`, `cargo test -- --skip`, removed CI test steps). JS/TS, Python, Go, Rust (`#[ignore]`, `#[should_panic]` loosened, `assert_eq!` to `is_ok()`, inline `#[cfg(test)]` modules found by content), Java/Kotlin (JUnit 4/5, TestNG, AssertJ, Hamcrest; `@Disabled`, `assumeTrue(false)`, `assertEquals` to `assertNotNull`; Kotlin is best effort for JUnit and kotlin.test) and C# (xUnit, NUnit, MSTest; `Skip =`, `[Ignore]`, `Assert.Equal` to `Assert.NotNull`); the build configuration scanned includes Cargo/nextest, Maven/Gradle, csproj/runsettings/xunit.runner.json and the common CI files. Findings are reported with a before/after line (`Tests 47 -> 44   Assertions 112 -> 104   Skipped 0 -> 1`) and recorded in the receipt; with `"integrity": "strict"` (or `--strict`) high/critical findings block the stop even when the checks pass. Suppress a line with `// isitdone: allow <reason>`; suppressions are reported, never hidden, and `--ci` treats new ones as findings.
+6. **Never loop forever.** The hook honours each host's `stop_hook_active` / `loop_count` (and counts attempts itself for hosts that send neither), counts its own attempts per session (default cap 3), and after the cap lets the agent stop with a visible warning. Malformed stdin, a broken config, or an internal error always allow the stop: `isitdone` must never brick the agent.
 
 ## CLI
 
@@ -195,9 +203,11 @@ npx isitdone --base main          scan the diff against a branch instead of HEAD
 npx isitdone --report out.md      write a markdown report; --sarif out.sarif writes SARIF 2.1.0 for code scanning
 npx isitdone history [--since 30d] [--exclude <substr>] [--verbose] [--min <pct>]
                                   share of past "done" claims backed by a passing test run
+                                  (Claude Code, Codex, Gemini CLI, Qwen Code and Cursor transcripts, local only)
 npx isitdone receipt [--md|--json] state of the current tree: PASS | FAIL | STALE | NONE (exit 0 only on full PASS)
 npx isitdone detect [--json]      which checks would run and where they came from
-npx isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor | gemini | all | auto)
+npx isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor | gemini | copilot | qwen | goose | droid |
+                                  devin | augment | opencode | junie | all | auto)
 npx isitdone doctor               prove the installed hook blocks; show detected checks and host notes
 npx isitdone uninstall            remove the hook(s)
 ```
@@ -248,7 +258,8 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 
 ## Roadmap
 
-- **v0.4** Windsurf, OpenCode and Copilot CLI adapters; `history` for Cursor and Gemini transcripts; a `--related` mode that runs only the tests touching the changed files for slow suites; Rust and Java test-integrity detectors.
+- **v0.5** A `--related` mode that runs only the tests touching the changed files for slow suites; Cline (a PreToolUse gate on `attempt_completion`) and Amp (`agent.end` plugin) adapters; a native OpenCode hook once `session.stopping` ships, and Windsurf/Cascade once its hooks can block; `history` for OpenCode's database; Kotest/Spek DSLs; a detector for expected values bent to match a regression.
+- Not planned: Roo Code and Kilo Code (no hooks), Kiro (its Stop trigger cannot block), Crush (PreToolUse only). Aider has no hooks but `aider --auto-test --test-cmd "npx isitdone"` feeds the same verdict back after every edit.
 
 ## Development
 

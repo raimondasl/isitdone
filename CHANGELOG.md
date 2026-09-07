@@ -4,6 +4,20 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-07
+
+### Added
+
+- Eight more hosts: GitHub Copilot CLI (`agentStop` in `.github/hooks/isitdone.json`), Qwen Code (`.qwen/settings.json`, Stop + PostToolUse), Goose (`.agents/plugins/isitdone/hooks/hooks.json`), Factory Droid (`.factory/hooks.json`), Devin (`.devin/hooks.v1.json`, Stop + PostToolUse; skipped when the Claude Code hook is present because Devin loads it too), Augment/Auggie (`.augment/settings.json`, block nested under `hookSpecificOutput`), OpenCode (a zero-dependency plugin at `.opencode/plugins/isitdone.js`: OpenCode has no blocking hook, so on `session.idle` the plugin runs the checks and, on failure, sends the reason back as a visible `[isitdone]` follow-up message; `tool.execute.after` carries the mid-turn warning) and Junie CLI (early access, `~/.junie/config.json`, user scope only). `init --agent all|auto`, `doctor` probes, receipts and per-session state cover them; hosts without a continuation flag get isitdone's own attempt counter. The Claude Code registration is also loaded by Devin and Continue (`cn`).
+- `isitdone history` reads Gemini CLI (`~/.gemini/tmp/<project>/chats`, `.json` and 0.39+ `.jsonl` with in-place record replacement, `$set` and `$rewindTo`), Qwen Code (`~/.qwen/projects/<cwd>/chats/*.jsonl`) and Cursor (the IDE's `state.vscdb` via `node:sqlite` on Node 22.13+/24, read-only in place; otherwise the `agent-transcripts` JSONL, whose sessions carry no exit codes and are reported as lossy) next to Claude Code and Codex; one line per agent in the report; `--exclude` and `history.exclude` apply to every source. Codex pre-0.40 rollouts are parsed and `thread_rolled_back` drops the undone turns.
+- Test-integrity scanner: Rust (cargo test/nextest; `#[test]`, `#[tokio::test]`, rstest, test_case; `#[ignore]` and `#[cfg_attr(_, ignore)]` tiers; `#[should_panic(expected)]` loosened; `assert*!`, `.unwrap()`, `?` and `panic!` as assertions; inline `#[cfg(test)]` modules in `src/` found by a bounded content sniff and scanned only inside the gated region), Java and Kotlin (JUnit 4/5, TestNG, AssertJ, Hamcrest, Mockito; `@Disabled`/`@Ignore`/`assumeTrue(false)`/`@EnabledIf*` tiers; `@CsvSource` rows counted; a rename away from a Surefire/Failsafe name is an effective deletion; Kotlin is best effort for JUnit/kotlin.test), C# (xUnit, NUnit, MSTest, FluentAssertions; `Skip =`/`[Ignore]`/`[Explicit]`/`Assume.That`; `[InlineData]`/`[TestCase]`/`[DataRow]` rows counted; `Assert.Pass` as an early return). New configuration files: Cargo.toml, .cargo/config, nextest.toml, justfile, Taskfile.yml, pom.xml, build/settings.gradle(.kts), gradle.properties, .mvn/maven.config, testng.xml, junit-platform.properties, *.csproj, Directory.Build.props, *.runsettings, xunit.runner.json, and more CI files; command patterns such as `cargo test -- --skip`, `-DskipTests`, `-Dmaven.test.failure.ignore`, `gradle -x test`, `dotnet test --filter`. Bench corpus: 170 cases, 100% precision.
+- `npm run demo` renders the README's animated terminal demo from a real run (`docs/demo.svg`).
+
+### Changed
+
+- `stop_hook_active` may be absent: the hook then counts consecutive blocks itself and resets when it gives up.
+- `history --json` reports `byAgent.<name>` for every source and marks claims without exit codes as `lossy`.
+
 ## [0.3.0] - 2026-09-07
 
 ### Added

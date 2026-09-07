@@ -24,6 +24,14 @@ You can paste this into your coding agent:
    npx isitdone init --agent codex     # .codex/hooks.json (then run /hooks in Codex and trust it)
    npx isitdone init --agent cursor    # .cursor/hooks.json
    npx isitdone init --agent gemini    # .gemini/settings.json
+   npx isitdone init --agent copilot   # .github/hooks/isitdone.json (restart Copilot CLI)
+   npx isitdone init --agent qwen      # .qwen/settings.json
+   npx isitdone init --agent goose     # .agents/plugins/isitdone/hooks/hooks.json
+   npx isitdone init --agent droid     # .factory/hooks.json
+   npx isitdone init --agent devin     # .devin/hooks.v1.json (skipped when the Claude Code hook exists; Devin loads it)
+   npx isitdone init --agent augment   # .augment/settings.json
+   npx isitdone init --agent opencode  # .opencode/plugins/isitdone.js (failed checks arrive as a visible [isitdone] follow-up)
+   npx isitdone init --agent junie --user   # ~/.junie/config.json (early access; user scope only)
    npx isitdone init --agent all
    ```
 
