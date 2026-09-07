@@ -1,8 +1,10 @@
 name: release
 
-# Publishes to npm with provenance when a v* tag is pushed.
-# Uses npm trusted publishing (OIDC): no NPM_TOKEN secret is needed once the package
-# is linked to this repository + workflow on npmjs.com (Package settings -> Trusted publishers).
+# Publishes both packages to npm with provenance when a v* tag is pushed, using npm trusted publishing (OIDC).
+# No NPM_TOKEN secret is involved. On npmjs.com, add a trusted publisher to BOTH packages:
+#   package settings -> Trusted publisher -> GitHub Actions
+#   owner: raimondasl   repository: isitdone   workflow filename: release.yml   environment: (leave empty)
+# Packages: @aivolution/isitdone (repo root) and isitdone (alias/). A version that already exists is skipped.
 
 on:
   push:
@@ -22,6 +24,8 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: use an npm that supports trusted publishing
+        run: npm install -g npm@latest && npm --version
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -35,16 +39,26 @@ jobs:
           fi
       - name: the judge is judged
         run: node dist/isitdone.js --json
-      - name: publish to npm (skipped if this version already exists)
+      - name: publish @aivolution/isitdone (skipped if this version already exists)
         run: |
           NAME="$(node -p "require('./package.json').name")"
           VER="$(node -p "require('./package.json').version")"
           if npm view "${NAME}@${VER}" version >/dev/null 2>&1; then
-            echo "${NAME}@${VER} is already on npm; skipping publish"
+            echo "${NAME}@${VER} is already on npm; skipping"
           else
-            npm publish --provenance --access public
+            npm publish --access public
+          fi
+      - name: publish the isitdone alias (skipped if this version already exists)
+        working-directory: alias
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+          if npm view "${NAME}@${VER}" version >/dev/null 2>&1; then
+            echo "${NAME}@${VER} is already on npm; skipping"
+          else
+            npm publish --access public
           fi
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes || echo "release already exists"
