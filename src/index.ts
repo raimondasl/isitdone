@@ -23,5 +23,8 @@ export type { HostAdapter, HostName, HookInput } from './hosts.js';
 export { scanHistory, parseSince } from './history.js';
 export type { HistoryReport, HistoryOptions, ClaimRecord, Verdict } from './history.js';
 export { findClaim } from './claims.js';
+export { checkEditedFile, formatEditNote } from './editcheck.js';
+export type { EditCheck } from './editcheck.js';
+export { toSarif } from './sarif.js';
 export { formatReport, formatBlockReason, formatMarkdown, toJson } from './report.js';
 export { VERSION } from './version.js';

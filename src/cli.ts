@@ -1,5 +1,7 @@
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadConfig } from './config.js';
+import { toSarif } from './sarif.js';
 import { detectChecks } from './detect.js';
 import { doctor } from './doctor.js';
 import { findRoot, gitInfo } from './git.js';
@@ -39,6 +41,7 @@ Options for run
   --base <ref>            diff against <ref> for the test-integrity scan (default: HEAD)
   --strict                block when the change weakened tests (high/critical findings)
   --ci                    strict, and new "isitdone: allow" suppressions count as findings
+  --sarif <file>          also write the integrity findings as SARIF 2.1.0 (GitHub code scanning)
 
 Options for history
   --since <30d|2w|2026-01-01>   only sessions after this point
@@ -75,7 +78,7 @@ interface Args {
   rest: string[];
 }
 
-const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min']);
+const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file']);
 const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
@@ -165,6 +168,9 @@ async function cmdRun(args: Args): Promise<number> {
     onCheckDone: live ? () => process.stdout.write(`\r${' '.repeat(70)}\r`) : undefined,
   });
   const state = res.receipt ? (res.receipt.status === 'PASS' ? 'PASS' : 'FAIL') : res.cached ? 'PASS' : 'NONE';
+  if (typeof args.flags.sarif === 'string' && res.integrity) {
+    writeFileSync(resolve(args.flags.sarif), JSON.stringify(toSarif(res.integrity, { base: typeof args.flags.base === 'string' ? args.flags.base : 'HEAD' }), null, 2) + '\n');
+  }
   if (json) out(JSON.stringify(toJson(res, state), null, 2));
   else out(formatReport(res, s));
   return res.ok && !integrityBlocks(res) ? 0 : 1;
