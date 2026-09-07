@@ -11,7 +11,7 @@ inputs:
     required: false
     default: 'latest'
   base:
-    description: 'Base branch to diff against for the test-integrity scan (defaults to the PR base branch)'
+    description: 'Base to diff against for the test-integrity scan: a branch name (defaults to the PR base branch), a commit sha, a tag, or a qualified ref'
     required: false
     default: ${{ github.base_ref }}
   strict:
@@ -19,7 +19,7 @@ inputs:
     required: false
     default: 'true'
   comment:
-    description: 'Create or update a sticky PR comment with the receipt (needs pull-requests: write; skipped on fork PRs)'
+    description: 'Create or update a sticky PR comment with the receipt (needs pull-requests: write; skipped on fork PRs with the default token)'
     required: false
     default: 'true'
   sarif:
@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'false'
   token:
-    description: 'Token used for the PR comment'
+    description: 'Token used for the PR comment (a PAT or GitHub App token also enables comments on fork PRs)'
     required: false
     default: ${{ github.token }}
   args:
@@ -63,24 +63,40 @@ runs:
       run: |
         set +e
         BASE_SHA=""
+        resolves() { git rev-parse --verify -q "$1^{commit}" >/dev/null 2>&1; }
+        # Fetch a commit by sha when it is not here yet; succeed only if it is then present (a force-pushed sha is gone).
+        fetch_commit() { resolves "$1" || { git fetch --no-tags --depth=1 origin "$1" >/dev/null 2>&1 && resolves "$1"; }; }
         if [ -n "$BASE_REF" ]; then
-          git fetch --no-tags --prune origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1
-          BASE_SHA=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null)
-          if [ -z "$BASE_SHA" ]; then
-            echo "::warning::Shallow clone: use actions/checkout with fetch-depth: 0 for an exact merge-base. Falling back to the event base sha."
-            if [ -n "$EVENT_BASE_SHA" ]; then
-              git fetch --no-tags --depth=1 origin "$EVENT_BASE_SHA" >/dev/null 2>&1
-              BASE_SHA="$EVENT_BASE_SHA"
-            else
-              BASE_SHA=$(git rev-parse "origin/${BASE_REF}" 2>/dev/null)
+          if resolves "$BASE_REF"; then
+            # A commit sha, a tag, or an already-qualified ref such as origin/main.
+            BASE_SHA=$(git merge-base "$BASE_REF" HEAD 2>/dev/null || git rev-parse --verify -q "$BASE_REF^{commit}")
+          else
+            REF="${BASE_REF#refs/heads/}"; REF="${REF#origin/}"
+            git fetch --no-tags --prune origin "+refs/heads/${REF}:refs/remotes/origin/${REF}" >/dev/null 2>&1
+            BASE_SHA=$(git merge-base "origin/${REF}" HEAD 2>/dev/null)
+            if [ -z "$BASE_SHA" ]; then
+              if resolves "origin/${REF}"; then
+                echo "::warning::Shallow clone: no merge-base between origin/${REF} and HEAD (use actions/checkout with fetch-depth: 0 for an exact one). Falling back to the event base sha."
+              else
+                echo "::warning::base '${BASE_REF}' could not be resolved as a branch, sha, tag or ref. Falling back to the event base sha."
+              fi
+              if [ -n "$EVENT_BASE_SHA" ] && fetch_commit "$EVENT_BASE_SHA"; then
+                BASE_SHA="$EVENT_BASE_SHA"
+              elif resolves "origin/${REF}"; then
+                BASE_SHA=$(git rev-parse "origin/${REF}")
+              fi
             fi
           fi
         elif [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
-          git fetch --no-tags --depth=1 origin "$EVENT_BEFORE" >/dev/null 2>&1
-          BASE_SHA="$EVENT_BEFORE"
+          if fetch_commit "$EVENT_BEFORE"; then
+            BASE_SHA="$EVENT_BEFORE"
+          else
+            echo "::warning::The commit before this push ($EVENT_BEFORE) is not reachable (force-push?). Falling back to HEAD~1."
+          fi
         fi
         if [ -z "$BASE_SHA" ]; then
-          BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
+          BASE_SHA=$(git rev-parse --verify -q "HEAD~1^{commit}" 2>/dev/null || git rev-parse HEAD)
+          echo "::warning::isitdone: no base commit could be determined; diffing against $BASE_SHA."
         fi
         echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
         echo "isitdone: diffing against $BASE_SHA"
@@ -101,11 +117,12 @@ runs:
         CMD="${ISITDONE_COMMAND:-npx --yes @aivolution/isitdone@${ISITDONE_VERSION}}"
         # A CI run never trusts a receipt from somewhere else.
         $CMD --no-cache $MODE --base "$BASE_SHA" \
-          --report "$RUNNER_TEMP/isitdone.md" --sarif "$RUNNER_TEMP/isitdone.sarif" $EXTRA_ARGS
+          --report "$RUNNER_TEMP/isitdone.md" --sarif "$RUNNER_TEMP/isitdone.sarif" --json-file "$RUNNER_TEMP/isitdone.json" $EXTRA_ARGS
         code=$?
         set -e
         [ -f "$RUNNER_TEMP/isitdone.md" ] || echo "isitdone produced no report (exit $code)" > "$RUNNER_TEMP/isitdone.md"
         [ -f "$RUNNER_TEMP/isitdone.sarif" ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "$RUNNER_TEMP/isitdone.sarif"
+        [ -f "$RUNNER_TEMP/isitdone.json" ] || echo "{\"ok\":false,\"done\":false,\"error\":\"isitdone produced no result (exit $code)\"}" > "$RUNNER_TEMP/isitdone.json"
         echo "report=$RUNNER_TEMP/isitdone.md" >> "$GITHUB_OUTPUT"
         echo "json=$RUNNER_TEMP/isitdone.json" >> "$GITHUB_OUTPUT"
         echo "code=$code" >> "$GITHUB_OUTPUT"
@@ -117,22 +134,25 @@ runs:
         { echo '## isitdone'; echo; head -c 900000 "$RUNNER_TEMP/isitdone.md"; } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Sticky PR comment
-      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      if: inputs.comment == 'true' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
+        TOKEN_IS_DEFAULT: ${{ inputs.token == github.token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       run: |
         set +e
         MARKER='<!-- isitdone:report -->'
-        if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+        # The default GITHUB_TOKEN is read-only on a fork's pull_request run; a supplied token or pull_request_target can write.
+        if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] && [ "$TOKEN_IS_DEFAULT" = "true" ] && [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           echo "::notice::Fork PR: GITHUB_TOKEN is read-only, skipping the PR comment. The receipt is in the job summary."
           exit 0
         fi
         { echo "$MARKER"; echo '### isitdone'; echo; head -c 60000 "$RUNNER_TEMP/isitdone.md"; } > "$RUNNER_TEMP/comment.md"
+        # Found by its marker, whoever authored it (github-actions[bot], a PAT user, or a GitHub App).
         ID=$(gh api --paginate -X GET "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F per_page=100 \
-              --jq ".[] | select(.user.login==\"github-actions[bot]\") | select(.body | contains(\"$MARKER\")) | .id" 2>/dev/null | head -n 1)
+              --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" 2>/dev/null | head -n 1)
         if [ -n "$ID" ]; then
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$ID" -F body=@"$RUNNER_TEMP/comment.md" >/dev/null \
             || echo "::warning::Could not update the PR comment (the workflow needs permissions: pull-requests: write). The receipt is in the job summary."

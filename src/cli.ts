@@ -43,6 +43,7 @@ Options for run
   --ci                    strict, and new "isitdone: allow" suppressions count as findings
   --sarif <file>          also write the integrity findings as SARIF 2.1.0 (GitHub code scanning)
   --report <file>         also write a markdown report (job summaries, PR comments)
+  --json-file <file>      also write the JSON result to a file
 
 Options for history
   --since <30d|2w|2026-01-01>   only sessions after this point
@@ -56,7 +57,8 @@ Options for init
   --agent <name>          claude | codex | cursor | gemini | all | auto (default: auto)
   --user                  install into the user-level settings instead of the project
   --timeout <seconds>     hook timeout (default: sized to the detected checks, at least 600)
-  --command "<cmd>"       hook command to register (default: npx -y ${PACKAGE_NAME} hook --host <name>)
+  --command "<cmd>"       hook command to register (default: npx -y ${PACKAGE_NAME} hook --host <name>); it must
+                          forward extra arguments, since the edit hook is the same command plus --event edit
   --remove                uninstall the hook(s)
   --no-edit-hook          only the Stop hook; skip the warn-only hook that runs after each test-file edit
   --no-doctor             skip the post-install doctor run
@@ -80,7 +82,7 @@ interface Args {
   rest: string[];
 }
 
-const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file', 'report']);
+const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file']);
 const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
@@ -175,6 +177,9 @@ async function cmdRun(args: Args): Promise<number> {
   }
   if (typeof args.flags.report === 'string') {
     writeFileSync(resolve(args.flags.report), formatReportMarkdown(res, state) + '\n');
+  }
+  if (typeof args.flags['json-file'] === 'string') {
+    writeFileSync(resolve(args.flags['json-file']), JSON.stringify(toJson(res, state), null, 2) + '\n');
   }
   if (json) out(JSON.stringify(toJson(res, state), null, 2));
   else out(formatReport(res, s));

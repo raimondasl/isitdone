@@ -64,7 +64,7 @@ export function gitTopLevel(cwd: string): string | null {
  * and without writing any blob into .git/objects (secrets in untracked files never enter the object store).
  * Uses a temporary index seeded from the real one so unchanged files are not re-hashed.
  */
-export function workingTreeHash(top: string): { tree: string | null; error: string | null } {
+export function workingTreeHash(top: string, depth = 0): { tree: string | null; error: string | null } {
   const tmp = join(tmpdir(), `isitdone-index-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const env = { GIT_INDEX_FILE: tmp };
   try {
@@ -81,13 +81,14 @@ export function workingTreeHash(top: string): { tree: string | null; error: stri
     if (!changed.ok) return { tree: null, error: `git ls-files failed: ${changed.stderr}` };
     // Submodules (gitlinks in the index) and embedded repositories (untracked "dir/" entries) are hashed recursively.
     const stage = git(['ls-files', '-z', '--stage'], top, env);
-    const gitlinks = new Set(
-      (stage.ok ? stage.stdout : '')
-        .split('\0')
-        .filter((l) => l.startsWith('160000 '))
-        .map((l) => l.split('\t')[1] ?? '')
-        .filter(Boolean),
-    );
+    // "160000 <sha> 0\t<path>": each submodule with the commit the index records for it.
+    const gitlinkSha = new Map<string, string>();
+    for (const l of (stage.ok ? stage.stdout : '').split('\0')) {
+      if (!l.startsWith('160000 ')) continue;
+      const path = l.split('\t')[1] ?? '';
+      if (path) gitlinkSha.set(path, l.slice(7, 47));
+    }
+    const gitlinks = new Set(gitlinkSha.keys());
     const nested: string[] = [];
     const paths = new Set<string>();
     for (const p of [...others.stdout.split('\0'), ...changed.stdout.split('\0')]) {
@@ -106,7 +107,14 @@ export function workingTreeHash(top: string): { tree: string | null; error: stri
     if (inner.length === 0) return { tree: wt.stdout.trim(), error: null };
     const h = createHash('sha1').update(wt.stdout.trim());
     for (const path of inner) {
-      const sub = workingTreeHash(join(top, path));
+      const dir = resolve(top, path);
+      // Recurse only into a real repository below top. A gitlink whose directory is missing or not initialised (a plain
+      // clone, actions/checkout by default) contributes the commit it records; "./" would be top itself, never a child.
+      if (depth >= 8 || dir === top || !dir.startsWith(top) || !existsSync(join(dir, '.git'))) {
+        h.update('\0').update(path).update('\0').update(gitlinkSha.get(path) ?? 'missing');
+        continue;
+      }
+      const sub = workingTreeHash(dir, depth + 1);
       if (sub.error) return { tree: null, error: `submodule ${path}: ${sub.error}` };
       h.update('\0').update(path).update('\0').update(sub.tree ?? 'unknown');
     }

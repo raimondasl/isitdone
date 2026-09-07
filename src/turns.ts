@@ -21,14 +21,19 @@ export interface ClaimRecord {
   agent: 'claude-code' | 'codex';
 }
 
-export const TEST_CMD = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|tests|test:\w+|jest|vitest|e2e)\b|\b(?:npx\s+|pnpm\s+|yarn\s+|bunx\s+)?(?:vitest|jest|mocha|ava|tap|playwright\s+test|cypress\s+run|pytest|py\.test|python3?\s+-m\s+(?:pytest|unittest)|unittest|go\s+test|cargo\s+(?:test|nextest)|dotnet\s+test|make\s+(?:test|tests|check)|gradle\w*\s+test|mvnw?\s+.*\btest\b|rspec|phpunit|mix\s+test|swift\s+test|isitdone)\b/;
+export const TEST_CMD = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|tests|test:\w+|jest|vitest|e2e)\b|\b(?:npx\s+|pnpm\s+|yarn\s+|bunx\s+)?(?:vitest|jest|mocha|ava|tap|playwright\s+test|cypress\s+run|pytest|py\.test|python3?\s+-m\s+(?:pytest|unittest)|unittest|go\s+test|cargo\s+(?:test|nextest)|dotnet\s+test|make\s+(?:test|tests|check)|gradle\w*\s+test|mvnw?\s+.*\btest\b|rspec|phpunit|mix\s+test|swift\s+test|isitdone(?!\s+(?:doctor|init|uninstall|history|hook|update|receipt|detect)\b))\b/;
 export const CHECK_CMD = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:typecheck|type-check|lint|check|build|verify|validate)\b|\b(?:npx\s+)?(?:tsc|eslint|biome|ruff|mypy|pyright|flake8|go\s+(?:vet|build)|cargo\s+(?:check|clippy|build)|dotnet\s+build)\b/;
-export const SHELL_EDIT = /\bsed\s+-i\b|\btee\b|\bcat\s*>|(?:^|[^>2&])>\s*[^&\s]|\bmv\s|\bcp\s|\bpatch\b|\bapply_patch\b|\bgit\s+(?:checkout|restore|stash|revert|cherry-pick|merge|rebase|apply)\b/;
+export const SHELL_EDIT = /\bsed\s+-i\b|\btee\b|\bcat\s*>|(?:^|[^>2&])>\s*(?!\/dev\/null\b)[^&\s]|\bmv\s|\bcp\s|(?:^|[;&|(]\s*)patch\s|\bapply_patch\b|\bgit\s+(?:checkout|restore|stash|revert|cherry-pick|merge|rebase|apply)\b/;
+
+/** Quoted strings blanked, so a ">" inside a grep pattern is not a redirection. */
+function unquoted(cmd: string): string {
+  return cmd.replace(/"(?:[^"\\]|\\.)*"|'[^']*'|`[^`]*`/g, '""');
+}
 
 export function classifyCommand(cmd: string): 'test' | 'check' | 'edit' | null {
   if (TEST_CMD.test(cmd)) return 'test';
   if (CHECK_CMD.test(cmd)) return 'check';
-  if (SHELL_EDIT.test(cmd)) return 'edit';
+  if (SHELL_EDIT.test(unquoted(cmd))) return 'edit';
   return null;
 }
 
@@ -45,6 +50,8 @@ export class TurnTracker {
   private lastText = '';
   private lastTextAt = 0;
   private pending = new Map<string, { kind: 'test' | 'check'; at: number }>();
+  /** Old id -> the id a pending command now lives under (Codex: call id -> session id -> write_stdin call id). */
+  private aliases = new Map<string, string>();
 
   constructor(
     private readonly meta: { project: () => string; session: string; agent: ClaimRecord['agent']; sinceMs: number },
@@ -64,12 +71,40 @@ export class TurnTracker {
     else if (kind === 'edit') this.edit(at);
   }
 
+  private key(id: string): string {
+    let k = id;
+    for (let i = 0; i < 16 && this.aliases.has(k); i++) k = this.aliases.get(k) as string;
+    return k;
+  }
+
   /** A command finished. `ok` is null when the exit status is unknown (treated as success). */
   resolve(id: string, ok: boolean | null, at: number): void {
-    const p = this.pending.get(id);
+    const k = this.key(id);
+    const p = this.pending.get(k);
     if (!p) return;
-    this.pending.delete(id);
+    this.pending.delete(k);
     this.record(p.kind, ok, at || p.at);
+  }
+
+  /** The command is still running; its outcome will arrive under `newId`. Nothing is recorded yet. */
+  rekey(oldId: string, newId: string): void {
+    const k = this.key(oldId);
+    const p = this.pending.get(k);
+    if (!p) return;
+    this.pending.delete(k);
+    this.aliases.delete(newId);
+    this.pending.set(newId, p);
+    this.aliases.set(oldId, newId);
+    if (k !== oldId) this.aliases.set(k, newId);
+  }
+
+  isPending(id: string): boolean {
+    return this.pending.has(this.key(id));
+  }
+
+  /** The command never ran (declined, aborted): drop it without recording a result. */
+  forget(id: string): void {
+    this.pending.delete(this.key(id));
   }
 
   /** A command with a known outcome, all at once (paginated Codex items). */
@@ -127,6 +162,7 @@ export class TurnTracker {
     this.lastText = '';
     this.lastTextAt = 0;
     this.pending.clear();
+    this.aliases.clear();
   }
 }
 

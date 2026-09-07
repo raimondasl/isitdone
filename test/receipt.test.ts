@@ -1,4 +1,5 @@
-import { cpSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { gitInfo, workingTreeHash } from '../src/git.js';
@@ -93,6 +94,35 @@ describe('gitInfo / workingTreeHash', () => {
       expect(gitInfo(repo.root).tree).not.toBe(withSub);
     } finally {
       inner.cleanup();
+    }
+  });
+
+  it('hashes a repository whose submodule is not initialised or whose directory is gone', () => {
+    repo = tempRepo({ files: { 'a.txt': 'a\n' } });
+    const inner = tempRepo({ files: { 'lib.txt': 'v1\n' } });
+    const clones = mkdtempSync(join(tmpdir(), 'isitdone-clone-'));
+    try {
+      repo.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', inner.root.replace(/\\/g, '/'), 'sub');
+      repo.commit('add submodule');
+      // a plain clone leaves sub/ as an empty directory (no .git inside): must not recurse into the parent forever
+      const clone = join(clones, 'clone');
+      repo.git('clone', '-q', repo.root, clone);
+      const started = Date.now();
+      const g = gitInfo(clone);
+      expect(Date.now() - started).toBeLessThan(15_000);
+      expect(g.treeError).toBeNull();
+      expect(g.tree).toHaveLength(40);
+      expect(gitInfo(clone).tree).toBe(g.tree);
+      // the submodule directory removed altogether: the parent still hashes
+      const before = gitInfo(repo.root);
+      expect(before.treeError).toBeNull();
+      rmSync(join(repo.root, 'sub'), { recursive: true, force: true });
+      const gone = gitInfo(repo.root);
+      expect(gone.treeError).toBeNull();
+      expect(gone.tree).toHaveLength(40);
+    } finally {
+      inner.cleanup();
+      rmSync(clones, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

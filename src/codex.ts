@@ -97,21 +97,54 @@ function commandOf(payload: Record<string, unknown>): string | null {
   return null;
 }
 
-/** Exit status from a function_call_output: "Process exited with code N", legacy JSON metadata, or unknown. */
-export function exitOk(output: unknown): boolean | null {
+/** Session id polled by a write_stdin call (Codex keeps a command running past its yield time and reports the exit later). */
+function stdinSession(payload: Record<string, unknown>): string | null {
+  if (payload.name !== 'write_stdin') return null;
+  try {
+    const args = typeof payload.arguments === 'string' ? (JSON.parse(payload.arguments) as Record<string, unknown>) : (obj(payload.arguments) ?? {});
+    const sid = args.session_id;
+    return typeof sid === 'number' || (typeof sid === 'string' && sid !== '') ? String(sid) : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface CommandOutcome {
+  /** Exit status, or null when the output does not say. */
+  ok: boolean | null;
+  /** Session id when the process is still running (the exit code arrives with a later write_stdin output). */
+  running: string | null;
+  /** The command was declined at the approval prompt and never ran. */
+  rejected: boolean;
+}
+
+/**
+ * What a function_call_output says about its command. Headers seen in the wild: "Process exited with code N" and
+ * "Process running with session ID N" (unified exec), "Exit code: N" (freeform shell), and the pre-0.60 JSON metadata.
+ */
+export function commandOutcome(output: unknown): CommandOutcome {
   const text = typeof output === 'string' ? output : Array.isArray(output) ? output.map((c) => (obj(c)?.text as string) ?? '').join('\n') : '';
-  const m = /^Process exited with code (-?\d+)\s*$/m.exec(text);
-  if (m) return Number(m[1]) === 0;
+  const none: CommandOutcome = { ok: null, running: null, rejected: false };
+  const exited = /^Process exited with code (-?\d+)\s*$/m.exec(text) ?? /^Exit code: (-?\d+)\s*$/m.exec(text);
+  if (exited) return { ...none, ok: Number(exited[1]) === 0 };
+  const running = /^Process running with session ID (\S+)\s*$/m.exec(text);
+  if (running) return { ...none, running: running[1] as string };
   if (text.trimStart().startsWith('{')) {
     try {
       const j = JSON.parse(text) as { metadata?: { exit_code?: number } };
-      if (j.metadata && typeof j.metadata.exit_code === 'number') return j.metadata.exit_code === 0;
+      if (j.metadata && typeof j.metadata.exit_code === 'number') return { ...none, ok: j.metadata.exit_code === 0 };
     } catch {
       // not JSON
     }
   }
-  if (/^(?:command failed|error:|FAIL\b|failed)/im.test(text) && /exit(?:ed)? (?:with )?(?:code |status )?[1-9]/i.test(text)) return false;
-  return null;
+  if (/^(?:exec command rejected|command rejected|rejected by user|approval (?:denied|rejected)|user (?:declined|rejected))/im.test(text)) return { ...none, rejected: true };
+  if (/^(?:command failed|error:|FAIL\b|failed)/im.test(text) && /exit(?:ed)? (?:with )?(?:code |status )?[1-9]/i.test(text)) return { ...none, ok: false };
+  return none;
+}
+
+/** Exit status from a function_call_output, or null when it is unknown (still running, rejected, unparseable). */
+export function exitOk(output: unknown): boolean | null {
+  return commandOutcome(output).ok;
 }
 
 async function readLines(file: string): Promise<AsyncIterable<string>> {
@@ -144,6 +177,9 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
   const turn = new TurnTracker({ project: () => cwd ?? 'codex', session, agent: 'codex', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
   let first = true;
   let sawTurnEvents = false;
+  // Codex writes the same edit or command as a response_item and again as an item_completed (paginated mode) or a
+  // patch_apply_end (legacy mode); ids are shared, so each is counted once.
+  const seen = new Set<string>();
   for await (const line of await readLines(file)) {
     if (!line.startsWith('{')) continue;
     let j: Record<string, unknown>;
@@ -166,24 +202,43 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
       if (et === 'turn_started') {
         sawTurnEvents = true;
         turn.finalize();
-      } else if (et === 'turn_complete' || et === 'turn_aborted') {
+      } else if (et === 'turn_complete') {
         if (typeof payload.last_agent_message === 'string') turn.text(payload.last_agent_message, at);
         sawTurnEvents = true;
+        turn.finalize();
+      } else if (et === 'turn_aborted') {
+        // Persisted on its own by 2025 builds that did not persist turn_started/turn_complete: it ends this turn but
+        // says nothing about how the rest of the file delimits turns.
+        if (typeof payload.last_agent_message === 'string') turn.text(payload.last_agent_message, at);
         turn.finalize();
       } else if (et === 'user_message' && !sawTurnEvents) {
         turn.finalize();
       } else if (et === 'agent_message' && typeof payload.message === 'string') {
         turn.text(payload.message, at);
       } else if (et === 'patch_apply_end') {
-        if (payload.success !== false) turn.edit(at);
+        const id = typeof payload.call_id === 'string' ? payload.call_id : '';
+        if (!(id && seen.has(id)) && payload.success !== false) turn.edit(at);
+        if (id) seen.add(id);
       } else if (et === 'item_completed') {
         const item = obj(payload.item) ?? {};
         const kind = item.type;
-        if (kind === 'FileChange' && item.status !== 'failed' && item.status !== 'declined') turn.edit(at);
-        else if (kind === 'CommandExecution') {
+        const id = typeof item.id === 'string' ? item.id : '';
+        if (kind === 'FileChange') {
+          if (!(id && seen.has(id)) && item.status !== 'failed' && item.status !== 'declined') turn.edit(at);
+          if (id) seen.add(id);
+        } else if (kind === 'CommandExecution') {
           const cmd = Array.isArray(item.command) ? item.command.map(String).join(' ') : typeof item.command === 'string' ? item.command : '';
           const ok = typeof item.exit_code === 'number' ? item.exit_code === 0 : item.status === 'failed' ? false : null;
-          turn.ran(cmd, ok, at);
+          // Declined at the approval prompt (or never finished): not a test run.
+          const neverRan = ok === null && (item.status === 'declined' || item.status === 'in_progress');
+          if (id && seen.has(id)) {
+            // Already counted from the response_item; this copy may still settle a command that was left running.
+            if (neverRan) turn.forget(id);
+            else if (turn.isPending(id)) turn.resolve(id, ok, at);
+          } else {
+            if (id) seen.add(id);
+            if (!neverRan) turn.ran(cmd, ok, at);
+          }
         } else if (kind === 'AgentMessage') {
           const t = (Array.isArray(item.content) ? (item.content as Array<Record<string, unknown>>) : []).map((c) => (typeof c.text === 'string' ? c.text : '')).join('\n');
           if (t.trim()) turn.text(t, at);
@@ -201,19 +256,36 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
       if (role === 'user' && text !== null && !sawTurnEvents) turn.finalize();
       else if (role === 'assistant' && text !== null) turn.text(text, at);
     } else if (pt === 'function_call') {
-      const cmd = commandOf(payload);
       const id = typeof payload.call_id === 'string' ? payload.call_id : '';
-      if (cmd !== null) turn.command(id, cmd, at);
+      const cmd = commandOf(payload);
+      const sid = stdinSession(payload);
+      if (cmd !== null) {
+        if (id) seen.add(id);
+        turn.command(id, cmd, at);
+      } else if (sid !== null && id) {
+        // Polling a still-running command: its exit code will come back under this call id.
+        turn.rekey(`session:${sid}`, id);
+      }
     } else if (pt === 'local_shell_call') {
       const action = obj(payload.action) ?? {};
       const cmd = Array.isArray(action.command) ? action.command.map(String).join(' ') : '';
       const id = typeof payload.call_id === 'string' ? payload.call_id : '';
-      if (cmd) turn.command(id, cmd, at);
+      if (cmd) {
+        if (id) seen.add(id);
+        turn.command(id, cmd, at);
+      }
     } else if (pt === 'function_call_output') {
       const id = typeof payload.call_id === 'string' ? payload.call_id : '';
-      turn.resolve(id, exitOk(payload.output), at);
+      const o = commandOutcome(payload.output);
+      if (o.running !== null) turn.rekey(id, `session:${o.running}`);
+      else if (o.rejected) turn.forget(id);
+      else turn.resolve(id, o.ok, at);
     } else if (pt === 'custom_tool_call') {
-      if (payload.name === 'apply_patch') turn.edit(at);
+      const id = typeof payload.call_id === 'string' ? payload.call_id : '';
+      if (payload.name === 'apply_patch') {
+        if (!(id && seen.has(id))) turn.edit(at);
+        if (id) seen.add(id);
+      }
     }
   }
   turn.finalize();

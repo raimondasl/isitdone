@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runEditHook } from '../src/hook.js';
+import { runEditHook, runHook } from '../src/hook.js';
 import { HOSTS, patchPaths } from '../src/hosts.js';
 import { init, installedHooks } from '../src/init.js';
 import { nodePkg, tempRepo, type TempRepo } from './helpers.js';
@@ -25,7 +25,7 @@ describe('runEditHook', () => {
     const o = runEditHook({ host: 'claude', stdin: payload() });
     const json = JSON.parse(o.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(json.hookSpecificOutput.hookEventName).toBe('PostToolUse');
-    expect(json.hookSpecificOutput.additionalContext).toMatch(/weakened the tests/);
+    expect(json.hookSpecificOutput.additionalContext).toMatch(/after your edit, src\/math\.test\.ts has weaker tests than HEAD/);
     expect(json.hookSpecificOutput.additionalContext).toMatch(/test skipped/);
     expect(o.notes).toHaveLength(1);
   });
@@ -37,7 +37,35 @@ describe('runEditHook', () => {
     const o = runEditHook({ host: 'codex', stdin: JSON.stringify(HOSTS.codex.edit!.synthetic(repo.root, 'src/math.test.ts')), cwd: repo.root });
     expect(JSON.parse(o.stdout).hookSpecificOutput.additionalContext).toMatch(/src\/math\.test\.ts/);
     expect(patchPaths(patch)).toEqual(['src/math.test.ts']);
-    expect(patchPaths('*** Begin Patch\n*** Add File: a.py\n+x\n*** Delete File: b.py\n*** Update File: c.py\n*** Move to: d.py\n@@\n-1\n+2\n*** End Patch')).toEqual(['a.py', 'b.py', 'c.py', 'd.py']);
+    expect(patchPaths('*** Begin Patch\n*** Add File: a.py\n+x\n*** Delete File: b.py\n*** Update File: c.py\n*** Move to: d.py\n@@\n-1\n+2\n*** End Patch')).toEqual(['a.py', 'b.py', 'd.py']);
+  });
+
+  it('codex: a relative apply_patch path is resolved against the session cwd, not the repository top', () => {
+    repo = tempRepo({ files: { 'packages/app/tests/math.test.ts': TEST, 'tests/math.test.ts': TEST, 'package.json': nodePkg({ test: 'x' }) } });
+    repo.write('packages/app/tests/math.test.ts', WEAKER);
+    const cwd = join(repo.root, 'packages', 'app');
+    const payload = JSON.stringify({ session_id: 's', cwd, hook_event_name: 'PostToolUse', tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Update File: tests/math.test.ts\n@@\n-a\n+b\n*** End Patch\n' } });
+    const o = runEditHook({ host: 'codex', stdin: payload });
+    expect(o.notes).toHaveLength(1);
+    expect(o.notes[0]).toMatch(/packages\/app\/tests\/math\.test\.ts has weaker tests/);
+  });
+
+  it('stays silent when the config turns the integrity scan off', () => {
+    repo = tempRepo({ files: { 'src/math.test.ts': TEST, 'package.json': nodePkg({ test: 'x' }), '.isitdone.json': '{ "integrity": "off" }\n' } });
+    repo.write('src/math.test.ts', WEAKER);
+    const o = runEditHook({ host: 'claude', stdin: JSON.stringify(HOSTS.claude.edit!.synthetic(repo.root, 'src/math.test.ts')) });
+    expect(o.stdout).toBe('');
+    expect(o.why).toMatch(/off in config/);
+  });
+
+  it('a stop-hook command that receives a tool event handles it as the warn-only edit hook', async () => {
+    repo = tempRepo({ files: { 'src/math.test.ts': TEST, 'package.json': nodePkg({ test: 'node -e "process.exit(1)"' }) } });
+    repo.write('src/math.test.ts', WEAKER);
+    const o = await runHook({ host: 'claude', stdin: JSON.stringify(HOSTS.claude.edit!.synthetic(repo.root, 'src/math.test.ts')) });
+    expect(o.decision).toBe('allow');
+    expect(o.why).toMatch(/PostToolUse payload routed to the edit hook/);
+    expect(JSON.parse(o.stdout).hookSpecificOutput.additionalContext).toMatch(/has weaker tests/);
+    expect(o.result).toBeNull();
   });
 
   it('gemini: AfterTool shape, {} when silent; cursor has no channel; garbage never throws', () => {
@@ -47,6 +75,9 @@ describe('runEditHook', () => {
     repo.write('src/math.test.ts', WEAKER);
     const o = runEditHook({ host: 'gemini', stdin: JSON.stringify(HOSTS.gemini.edit!.synthetic(repo.root, 'src/math.test.ts')) });
     expect(JSON.parse(o.stdout).hookSpecificOutput.hookEventName).toBe('AfterTool');
+    // Gemini HTML-escapes the context; the arrows in the summary line must not reach the model as "-&gt;".
+    expect(JSON.parse(o.stdout).hookSpecificOutput.additionalContext).not.toMatch(/->/);
+    expect(JSON.parse(o.stdout).hookSpecificOutput.additionalContext).toMatch(/Tests 2 → 2/);
     expect(runEditHook({ host: 'cursor', stdin: '{}' }).stdout).toBe('');
     expect(runEditHook({ host: 'claude', stdin: 'not json', cwd: repo.root }).stdout).toBe('');
     expect(runEditHook({ host: 'claude', stdin: '{}', cwd: repo.root }).stdout).toBe('');

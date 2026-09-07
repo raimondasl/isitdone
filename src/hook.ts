@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { findClaim } from './claims.js';
 import { loadConfig, type IsitdoneConfig } from './config.js';
 import { detectChecks } from './detect.js';
+import { collectDiff, type DiffResult } from './diff.js';
 import { checkEditedFile } from './editcheck.js';
 import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
-import { findRoot, RECEIPT_DIR } from './git.js';
+import { findRoot, gitTopLevel, RECEIPT_DIR } from './git.js';
 import { getHost, type HookInput, type HostAdapter } from './hosts.js';
 import { ensureStateDir } from './receipt.js';
 import { formatBlockReason, integrityBlocks } from './report.js';
@@ -157,6 +158,12 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   if (!raw) return allow('stdin was not a JSON object (host bug or manual run); allowing');
   const input = host.parse(raw);
 
+  // A custom --command wrapper that does not forward "--event edit" sends its tool events here too; those are warn-only.
+  if (input.hookEventName && /^(?:PostToolUse|AfterTool|afterFileEdit)$/i.test(input.hookEventName)) {
+    const e = runEditHook({ host: opts.host, stdin: opts.stdin, cwd: opts.cwd, env });
+    return { stdout: e.stdout, stderr: '', exitCode: 0, decision: 'allow', why: `${input.hookEventName} payload routed to the edit hook: ${e.why}`, result: null, attempts: 0 };
+  }
+
   if (input.status !== null && input.status !== 'completed') return allow(`host status is ${input.status}; nothing to verify`);
   if (input.permissionMode === 'plan') return allow('plan mode: the agent cannot edit files, so there is nothing to verify yet');
 
@@ -268,10 +275,23 @@ export function runEditHook(opts: { host: string; stdin: string; cwd?: string; e
   const input = host.edit.parse(raw);
   if (input.files.length === 0) return silent('no file path in the payload');
   const cwd = input.cwd && existsSync(input.cwd) ? input.cwd : (opts.cwd ?? process.cwd());
+  try {
+    if (loadConfig(findRoot(cwd)).config.integrity === 'off') return silent('integrity scan is off in config');
+  } catch {
+    // a broken config is reported by the Stop hook; the edit hook stays quiet
+  }
+  const top = gitTopLevel(cwd);
+  if (!top) return silent('not inside a git repository');
+  // One working-tree diff per hook run, taken only once an edited file turns out to be worth scanning.
+  let diff: DiffResult | null = null;
+  const diffOnce = (): DiffResult => {
+    if (!diff) diff = collectDiff(top);
+    return diff;
+  };
   const notes: string[] = [];
   for (const file of input.files.slice(0, 8)) {
     try {
-      const r = checkEditedFile(cwd, file);
+      const r = checkEditedFile(cwd, file, 'HEAD', diffOnce);
       if (r?.note) notes.push(r.note);
     } catch {
       // a scan problem must never disturb the agent's tool call

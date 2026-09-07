@@ -127,6 +127,9 @@ function synthAdded(top: string, rel: string): DiffFile | null {
 export function collectDiff(top: string, base = 'HEAD'): DiffResult {
   const exclude = `:(exclude)${RECEIPT_DIR}`;
   const hasHead = git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], top).ok;
+  // Only HEAD may be absent (a repository with no commits yet); an explicit base that does not resolve is an error,
+  // not "everything is new".
+  if (!hasHead && base !== 'HEAD') return { files: [], base, error: `base ${base} not found` };
   let files: DiffFile[] = [];
   if (hasHead) {
     // core.quotePath=false keeps non-ASCII paths readable instead of octal-escaped.

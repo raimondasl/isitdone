@@ -106,6 +106,10 @@ describe('collectDiff', () => {
     const d = collectDiff(repo.root, first);
     expect(d.files.map((f) => f.path)).toEqual(['x.txt']);
     expect(readAtBase(repo.root, 'x.txt', first)).toBe('1\n');
+    // an explicit base that does not exist is an error, never "everything is new"
+    const missing = collectDiff(repo.root, 'no-such-ref');
+    expect(missing.error).toMatch(/base no-such-ref not found/);
+    expect(missing.files).toEqual([]);
   });
 
   it('works in a repo with no commits (everything is untracked)', () => {

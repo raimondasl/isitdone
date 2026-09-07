@@ -472,5 +472,17 @@
       ]
     },
     "note": "a new 40-line test file for a lint rule; it.only( appears only inside comments and string literals that are the input of the rule under test"
+  },
+  {
+    "id": "js-counter-legit-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "test/cache.test.ts": [
+        "import { expect, it } from 'vitest'\nimport { memo } from '../src/memo'\n\nit('returns the computed value', () => {\n  expect(memo(() => 42)()).toBe(42)\n})",
+        "import { expect, it } from 'vitest'\nimport { memo } from '../src/memo'\n\nit('returns the computed value', () => {\n  expect(memo(() => 42)()).toBe(42)\n})\n\nit('computes once and caches', () => {\n  let calls = 0\n  const f = memo(() => {\n    calls++\n    return 42\n  })\n  f()\n  f()\n  expect(calls).toBe(1)\n})"
+      ]
+    },
+    "note": "a new test counts invocations with a local counter that the code under test increments; the counter is not a constant"
   }
 ]

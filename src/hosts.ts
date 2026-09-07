@@ -127,7 +127,11 @@ function pickRoot(roots: unknown[]): string | null {
 /** Files named in a Codex apply_patch document. */
 export function patchPaths(patch: string): string[] {
   const out: string[] = [];
-  for (const m of patch.matchAll(/^\s*\*\*\* (?:Update File|Add File|Delete File|Move to): (.+?)\s*$/gm)) out.push(m[1] as string);
+  for (const m of patch.matchAll(/^\s*\*\*\* (Update File|Add File|Delete File|Move to): (.+?)\s*$/gm)) {
+    // "*** Update File: X" followed by "*** Move to: Y" is one change; the agent now owns Y.
+    if (m[1] === 'Move to' && out.length > 0) out.pop();
+    out.push(m[2] as string);
+  }
   return [...new Set(out)];
 }
 
@@ -414,7 +418,8 @@ const gemini: HostAdapter = {
     registered: (s) => registeredClaudeStyle(s, 'AfterTool', isEditCommand),
     unregister: (s) => unregisterClaudeStyle(s, 'AfterTool', isEditCommand),
     parse: (raw) => ({ files: editFiles(raw), cwd: str(raw.cwd), toolName: str(raw.tool_name) }),
-    warn: (text) => additionalContext('AfterTool', text),
+    // Gemini HTML-escapes additionalContext ("->" would reach the model as "-&gt;").
+    warn: (text) => additionalContext('AfterTool', text.replace(/->/g, '→')),
     silent: () => '{}',
     synthetic: (root, file) => ({ session_id: 'isitdone-doctor', cwd: root, hook_event_name: 'AfterTool', timestamp: new Date().toISOString(), tool_name: 'replace', tool_input: { file_path: join(root, file), old_string: 'a', new_string: 'b' }, tool_response: { llmContent: 'Successfully modified file', returnDisplay: {} } }),
   },

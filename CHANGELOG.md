@@ -12,14 +12,18 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 - GitHub Action (`uses: raimondasl/isitdone@v0`): runs the checks and the test-integrity scan against the PR merge-base from a clean checkout (never trusts a receipt), writes the receipt to the job summary, keeps one updated PR comment (skipped gracefully on fork PRs or without `pull-requests: write`), optional SARIF upload, strict by default.
 - `isitdone history` reads Codex CLI rollouts (`$CODEX_HOME/sessions` in the dated and flat layouts, `archived_sessions`, zstd-compressed files where Node can decompress them), both the legacy and the paginated history modes; reports per agent.
 - Submodules and embedded repositories are part of the working-tree hash, so edits inside them invalidate receipts.
-- `--report <file>` (markdown report) and `--sarif <file>` (SARIF 2.1.0) on `run`.
-- `bench/`: a labelled corpus of 117 legitimate refactors and tampering cases with `npm run bench` printing precision and recall per language; new detectors it demanded (dropped table rows, constant assertion targets, `expect.assertions(0)`, plain `assert x == v` downgrades, unittest first-argument subjects, returns behind an `if`, docstring openers, multi-line ignore lists, JSON-escaped `-t` quotes).
+- `--report <file>` (markdown report), `--sarif <file>` (SARIF 2.1.0) and `--json-file <file>` on `run`.
+- `bench/`: a labelled corpus of 118 legitimate refactors and tampering cases with `npm run bench` printing precision and recall per language; new detectors it demanded (dropped table rows, constant assertion targets, `expect.assertions(0)`, plain `assert x == v` downgrades, unittest first-argument subjects, returns behind an `if`, docstring openers, multi-line ignore lists, JSON-escaped `-t` quotes).
 - Programmatic API: `import { verify, scanIntegrity, checkEditedFile, toSarif } from '@aivolution/isitdone'` (`dist/index.js`).
 
 ### Changed
 
 - The block reason ends with `[isitdone x.y.z]` (used by `doctor` to report the running hook version).
 - `continue-on-error` on a CI step that does not run tests is low, not critical.
+- `isitdone history` (Codex): the freeform shell header `Exit code: N` is parsed; a command still running after Codex's yield window is followed through the `write_stdin` polls that carry its real exit code instead of counting as a pass; a declined command is not a test run; a `turn_aborted` line from a build that persisted no other turn events no longer merges the rest of the session into one turn; edits and commands written both as `response_item` and as `item_completed`/`patch_apply_end` are counted once; `grep "=>"`, `cat src/patch.ts` and `>/dev/null` are not edits; `isitdone doctor|init|history|...` are not test runs.
+- Post-edit hook: honours `"integrity": "off"`; resolves Codex's cwd-relative `apply_patch` paths against the session cwd; diffs the working tree once per hook run; a rename with edits is reported once under the new name; the note says what it measures (uncommitted changes vs HEAD, not only this edit); a file on another Windows drive is outside the repo; Gemini no longer sees `-&gt;`. A custom `--command` wrapper that does not forward `--event edit` gets its tool events handled as the warn-only edit hook instead of running the checks.
+- Working-tree hash: a submodule that is not initialised or whose directory is missing contributes its recorded commit instead of recursing forever (uninitialised) or making the whole hash unknown (missing).
+- `--base <ref>` that does not resolve is an error (integrity scan skipped with a warning) instead of "every file is new". The Action verifies each fallback base commit before using it, accepts a sha, tag or qualified ref as `base`, warns when it falls back, finds its sticky comment by marker (so a PAT or App token updates instead of duplicating), comments on `pull_request_target` and on fork PRs when a write token is supplied, and its `json` output now points at a file that exists.
 
 ## [0.2.1] - 2026-09-07
 

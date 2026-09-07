@@ -495,8 +495,12 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
         // An assertion whose subject is a constant introduced by the same change: expect(total).toBe(42) after `const total = 42`.
         const subj = /\bexpect\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\.(?:not\.)?to\w+\s*\(/.exec(code)?.[1];
         if (subj) {
-          const constRe = new RegExp(`\\b(?:const|let|var)\\s+${subj.replace(/\$/g, '\\$')}\\s*=\\s*(?:-?[\\d.]+|true|false|null|["'\`]|\\[\\s*\\]|\\{\\s*\\})`);
-          if (added.some((a) => a !== line && constRe.test(normalize('js', a.text)))) add(ctx, 'tautology-added', 'high', line, `expect(${subj}) tests a constant assigned in the same change, not the code under test`, line.text, sup);
+          const esc = subj.replace(/\$/g, '\\$');
+          const constRe = new RegExp(`\\b(?:const|let|var)\\s+${esc}\\s*=\\s*(?:-?[\\d.]+|true|false|null|["'\`]|\\[\\s*\\]|\\{\\s*\\})`);
+          // A counter or accumulator (calls++, total += x, seen.push(...)) is not a constant.
+          const mutRe = new RegExp(`\\b${esc}\\s*(?:\\+\\+|--|[-+*/%]=)|\\b${esc}\\.(?:push|add|set|splice|unshift)\\s*\\(`);
+          const isConst = added.some((a) => a !== line && constRe.test(normalize('js', a.text))) && !added.some((a) => mutRe.test(normalize('js', a.text)));
+          if (isConst) add(ctx, 'tautology-added', 'high', line, `expect(${subj}) tests a constant assigned in the same change, not the code under test`, line.text, sup);
         }
       }
 

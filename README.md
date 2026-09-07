@@ -137,16 +137,16 @@ npx isitdone update --check  # only reports whether a newer release exists
 
 ## Mid-turn warnings
 
-The Stop hook is the gate; the post-edit hook is the nudge. On Claude Code, Codex and Gemini CLI, `init` also registers a hook that runs after every `Edit`/`Write` (Codex: `apply_patch`, Gemini: `write_file`/`replace`). It scans just that file against `HEAD` and, when the edit weakened a test, adds a short factual note next to the tool result:
+The Stop hook is the gate; the post-edit hook is the nudge. On Claude Code, Codex and Gemini CLI, `init` also registers a hook that runs after every `Edit`/`Write` (Codex: `apply_patch`, Gemini: `write_file`/`replace`). It scans just that file against `HEAD` (so it sees every uncommitted change to the file, not only the lines this edit touched) and, when the tests got weaker, adds a short factual note next to the tool result:
 
 ```
-isitdone: your edit to src/auth.test.ts weakened the tests (Tests 4 -> 4   Assertions 6 -> 4   Skipped 0 -> 1):
+isitdone: after your edit, src/auth.test.ts has weaker tests than HEAD (Tests 4 -> 4   Assertions 6 -> 4   Skipped 0 -> 1):
   - line 12: test skipped or marked expected-failure [high]
   - line 30: assertion weakened: toEqual -> existence check [medium]
-If this is intentional, say so to the user and explain why; otherwise restore the tests. The Stop hook will run the full checks before you can finish.
+If this is intentional, or the change was already there before your edit, tell the user why; otherwise restore the tests. The Stop hook will run the full checks before you can finish.
 ```
 
-It never blocks and it is fast (one file, no test run). Cursor has no channel an agent can see after an edit, so there the warning arrives with the Stop hook instead. Skip it with `init --no-edit-hook`.
+It never blocks and it is fast (one file, no test run). Cursor has no channel an agent can see after an edit, so there the warning arrives with the Stop hook instead. Skip it with `init --no-edit-hook`; `"integrity": "off"` in the config turns it off as well.
 
 ## GitHub Action
 
@@ -182,7 +182,7 @@ It runs the repo's checks, scans the diff against the PR base for weakened tests
 ```
 npx isitdone                      run all checks, write the receipt, exit 0 (DONE) or 1 (NOT DONE)
 npx isitdone --profile lite       typecheck + lint only
-npx isitdone --json               {"ok", "done", "checks": [...]} for scripts and orchestrators
+npx isitdone --json               {"ok", "done", "checks": [...]} for scripts and orchestrators (--json-file <path> writes it)
 npx isitdone --no-cache           re-run even if a PASS receipt exists for this tree
 npx isitdone --all                keep running tests even if typecheck failed
 npx isitdone --strict             block when the change weakened tests (high/critical findings)
@@ -229,7 +229,7 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 
 - **Not a lie detector.** It does not grade the agent's sentences; it runs commands and reads exit codes. The claim only decides *how much* to run.
 - **Not adversarial security.** The receipt is HMAC-signed so a hand-edited file reads NONE, and the tree hash makes a stale receipt visible, but an agent with permission to edit settings can remove the hook. `isitdone` guards honest mistakes, which is where nearly all "tests pass" fiction comes from.
-- **Not an AST.** The test-integrity scan is line-and-regex over the diff with a small, published detector list. It catches the common ways an agent makes red go green without fixing anything; it will miss clever ones (a test's expected value bent to match a regression, for one) and occasionally flag a legitimate refactor, which is why it warns by default and every finding shows its evidence. Its precision and recall are measured on a labelled corpus in [`bench/`](bench/) (`npm run bench`; 117 hand-labelled cases at the time of writing, 100% precision, 98% recall) that grows with every reported mistake.
+- **Not an AST.** The test-integrity scan is line-and-regex over the diff with a small, published detector list. It catches the common ways an agent makes red go green without fixing anything; it will miss clever ones (a test's expected value bent to match a regression, for one) and occasionally flag a legitimate refactor, which is why it warns by default and every finding shows its evidence. Its precision and recall are measured on a labelled corpus in [`bench/`](bench/) (`npm run bench`; 118 hand-labelled cases at the time of writing, 100% precision, 98% recall) that grows with every reported mistake.
 - **Not an LLM.** Nothing here calls a model, phones home, or needs a key.
 
 ## Related tools
