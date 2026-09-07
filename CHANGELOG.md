@@ -4,6 +4,14 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-07
+
+### Added
+
+- `isitdone update`: npx keeps its own install cache (`_npx/`) that `npm cache clean` does not touch, so an unpinned `npx -y @aivolution/isitdone hook ...` could keep running the first version it cached. `update` removes those entries for both packages and re-warms them at the registry's latest; `--check` only reports whether a newer release exists.
+- `doctor` now reports which isitdone version the installed hook actually runs (the block reason carries `[isitdone x.y.z]`), flags a hook older than the CLI, and mentions a newer release when the registry is reachable (`--no-latest` skips the lookup).
+- README "Updating" section.
+
 ## [0.2.0] - 2026-09-07
 
 ### Added

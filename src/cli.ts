@@ -10,6 +10,7 @@ import { parseSince, scanHistory, type HistoryReport } from './history.js';
 import { formatDuration, styleFor } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
 import { formatMarkdown, formatReport, integrityBlocks, toJson } from './report.js';
+import { isNewer, runUpdate } from './update.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
 
@@ -27,6 +28,7 @@ Usage
   ${NPX} hook --host <name>   (used by the agent) read the Stop payload on stdin, block if needed
   ${NPX} uninstall            remove the hook(s)
   ${NPX} history              how many of your agent's past "done" claims had a test run behind them
+  ${NPX} update               refresh the npx-cached hook to the latest release (--check only reports)
 
 Options for run
   --profile <lite|full>   lite = typecheck+lint only, full = everything (default: full)
@@ -74,7 +76,7 @@ interface Args {
 }
 
 const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min']);
-const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents']);
+const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
 
@@ -350,7 +352,7 @@ async function cmdInit(args: Args): Promise<number> {
   if (!remove) gi = ensureGitignore(root);
 
   if (json) {
-    const report = !remove && args.flags.doctor !== false ? await doctor({ root, probeHooks: args.flags.probe !== false }) : null;
+    const report = !remove && args.flags.doctor !== false ? await doctor({ root, probeHooks: args.flags.probe !== false, checkLatest: args.flags.latest !== false }) : null;
     out(JSON.stringify({ root, hooks: results, detected: d.checks, notes: d.notes, gitignore: gi, doctor: report }, null, 2));
     return report ? (report.ok ? 0 : 1) : 0;
   }
@@ -379,7 +381,7 @@ async function cmdInit(args: Args): Promise<number> {
 async function cmdDoctor(args: Args): Promise<number> {
   const root = repoRoot(args.flags);
   const s = styleFor(process.stdout);
-  const report = await doctor({ root, probeHooks: args.flags.probe !== false });
+  const report = await doctor({ root, probeHooks: args.flags.probe !== false, checkLatest: args.flags.latest !== false });
   if (args.flags.json === true) {
     out(JSON.stringify(report, null, 2));
     return report.ok ? 0 : 1;
@@ -393,6 +395,28 @@ async function cmdDoctor(args: Args): Promise<number> {
   out('');
   out(report.ok ? `  ${s.green(s.bold('OK'))}   the agent cannot claim done with failing checks in this repo` : `  ${s.yellow(s.bold('ATTENTION'))}   fix the items marked !! above`);
   return report.ok ? 0 : 1;
+}
+
+function cmdUpdate(args: Args): number {
+  const s = styleFor(process.stdout);
+  const json = args.flags.json === true;
+  const checkOnly = args.flags.check === true;
+  const r = runUpdate({ checkOnly, warm: args.flags.warm !== false });
+  if (json) {
+    out(JSON.stringify(r, null, 2));
+    return 0;
+  }
+  out(`${s.bold('isitdone update')}  ${s.dim(`running ${r.running}${r.latest ? `, latest ${r.latest}` : ', registry unreachable'}`)}`);
+  if (checkOnly) {
+    if (r.latest && isNewer(r.latest, r.running)) out(`  ${s.yellow('outdated')}   ${r.latest} is available; run \`${NPX} update\``);
+    else if (r.latest) out(`  ${s.green('up to date')}`);
+    return 0;
+  }
+  if (r.removed.length === 0) out(`  ${s.dim('no cached npx copies found')}${r.cacheDir ? s.dim(` under ${r.cacheDir}`) : ''}`);
+  for (const d of r.removed) out(`  removed    ${s.dim(d)}`);
+  for (const w of r.warmed) out(`  ${w.version ? s.green('warmed ') : s.red('failed ')}    ${w.pkg.padEnd(24)} ${w.version ?? ''}${w.error ? s.dim('  ' + w.error) : ''}`);
+  out(`  ${s.dim('hooks that run `npx -y ' + PACKAGE_NAME + ' hook ...` now use the refreshed copy; `npm i -D ' + PACKAGE_NAME + '` projects should run `npm update ' + PACKAGE_NAME + '`.')}`);
+  return r.warmed.some((w) => w.error) ? 1 : 0;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -435,6 +459,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdDoctor(args);
       case 'history':
         return await cmdHistory(args);
+      case 'update':
+        return cmdUpdate(args);
       default:
         err(`isitdone: unknown command "${args.command}"\n`);
         err(HELP);

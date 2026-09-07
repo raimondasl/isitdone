@@ -124,6 +124,17 @@ Add `--user` to install into your user-level settings instead of the project. `n
 
 The code lives in the [`@aivolution/isitdone`](https://www.npmjs.com/package/@aivolution/isitdone) package; `isitdone` on npm is a short alias with the same command, and installed hooks always call the canonical package. `npm i -D @aivolution/isitdone` makes the hook resolve locally, with no registry lookup and offline.
 
+## Updating
+
+The hook runs through `npx`, which keeps its own install cache and does not refresh an unpinned package by itself. To move the hook to the latest release:
+
+```
+npx isitdone update          # clears the cached copies of both packages and re-warms them
+npx isitdone update --check  # only reports whether a newer release exists
+```
+
+`doctor` reports the version the hook actually runs and mentions when a newer release is available. Projects that installed `@aivolution/isitdone` as a dev dependency update it with `npm update @aivolution/isitdone` instead.
+
 ## How it decides
 
 1. **Detect.** Reads `package.json` scripts (`test`, `typecheck`, `lint`, `build`; npm, pnpm, yarn, bun, deno), `pyproject.toml`/`pytest.ini`/`requirements.txt` (pytest, ruff, flake8, mypy, pyright; uv/poetry/pipenv runners), `go.mod` (`go vet`, `go test ./...`), `Cargo.toml` (`cargo check`, `cargo test`), .NET solutions, Gradle/Maven, and `Makefile` targets. Anything can be overridden in `.isitdone.json`.

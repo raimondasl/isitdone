@@ -101,7 +101,7 @@ describe('cli end-to-end', () => {
 
   it('init + doctor: installs the hook, proves it blocks, and uninstalls', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
-    const r = cli(['init', '--agent', 'claude,codex', '--command', LOCAL_HOOK('claude')], repo.root);
+    const r = cli(['init', '--agent', 'claude,codex', '--command', LOCAL_HOOK('claude'), '--no-latest'], repo.root);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/Claude Code\s+added/);
     expect(r.stdout).toMatch(/Codex CLI\s+added/);
@@ -113,9 +113,10 @@ describe('cli end-to-end', () => {
     // doctor did not leave a receipt or state behind
     expect(existsSync(join(repo.root, '.isitdone', 'receipt.json'))).toBe(false);
 
-    const d = cli(['doctor', '--json'], repo.root);
+    const d = cli(['doctor', '--json', '--no-latest'], repo.root);
     const report = JSON.parse(d.stdout);
     expect(report.ok).toBe(true);
+    expect(report.checks.find((c: { name: string }) => c.name === 'probe:claude').detail).toMatch(/hook runs isitdone 0\.0\.0-test/);
     expect(report.checks.some((c: { name: string }) => c.name === 'hook:claude')).toBe(true);
 
     const u = cli(['uninstall', '--agent', 'claude,codex'], repo.root);
@@ -126,7 +127,7 @@ describe('cli end-to-end', () => {
 
   it('doctor flags a repo with no hook and no checks', () => {
     repo = tempRepo({ files: { 'README.md': 'x' } });
-    const d = cli(['doctor', '--json'], repo.root);
+    const d = cli(['doctor', '--json', '--no-latest'], repo.root);
     expect(d.code).toBe(1);
     const report = JSON.parse(d.stdout);
     expect(report.ok).toBe(false);

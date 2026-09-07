@@ -135,10 +135,10 @@ export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempt
   const timedOut = failed.filter((r) => r.status === 'TIMEOUT');
   const onlyIntegrity = failed.length === 0 && integrityBlocks(res);
   if (onlyIntegrity) {
-    lines.push(`isitdone: NOT DONE. The checks pass, but the change weakened the tests (attempt ${attempt}/${maxAttempts}).`);
+    lines.push(`isitdone: NOT DONE. The checks pass, but the change weakened the tests (attempt ${attempt}/${maxAttempts}). [isitdone ${VERSION}]`);
   } else {
     const verb = timedOut.length === failed.length ? 'timed out' : timedOut.length > 0 ? 'failed or timed out' : 'failed';
-    lines.push(`isitdone: NOT DONE. ${failed.length} check${failed.length === 1 ? '' : 's'} ${verb} on the current working tree (attempt ${attempt}/${maxAttempts}).`);
+    lines.push(`isitdone: NOT DONE. ${failed.length} check${failed.length === 1 ? '' : 's'} ${verb} on the current working tree (attempt ${attempt}/${maxAttempts}). [isitdone ${VERSION}]`);
   }
   if (res.claim) lines.push(`You claimed: "${res.claim}"`);
   lines.push('');

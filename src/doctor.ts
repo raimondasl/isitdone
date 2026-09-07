@@ -7,7 +7,9 @@ import { gitInfo } from './git.js';
 import { installedHooks } from './init.js';
 import type { HostAdapter } from './hosts.js';
 import { childEnv, killTree } from './run.js';
+import { isNewer, latestVersion } from './update.js';
 import { budgetSeconds, timeoutFor } from './verify.js';
+import { VERSION } from './version.js';
 
 export interface DoctorCheck {
   name: string;
@@ -28,6 +30,8 @@ export interface DoctorOptions {
   probeHooks?: boolean;
   /** Milliseconds to wait for a hook probe. Default 90s (npx cold start can be slow). */
   probeTimeoutMs?: number;
+  /** Ask the registry whether a newer release exists. Default true; silently skipped offline. */
+  checkLatest?: boolean;
 }
 
 interface ProbeResult {
@@ -162,7 +166,11 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
       const probe = await probeHook(h.command, h.host, root, probeTimeout);
       const verdict = looksBlocked(h.host, probe);
       if (verdict.blocked) {
-        checks.push({ name: `probe:${h.host.name}`, ok: true, detail: `synthetic "tests pass" stop was blocked in ${(probe.durationMs / 1000).toFixed(1)}s (${verdict.reason})` });
+        const hookVersion = /\[isitdone ([^\]\s]+)\]/.exec(probe.stdout + probe.stderr)?.[1] ?? null;
+        checks.push({ name: `probe:${h.host.name}`, ok: true, detail: `synthetic "tests pass" stop was blocked in ${(probe.durationMs / 1000).toFixed(1)}s (${verdict.reason})${hookVersion ? `, hook runs isitdone ${hookVersion}` : ''}` });
+        if (hookVersion && hookVersion !== VERSION && isNewer(VERSION, hookVersion)) {
+          checks.push({ name: `stale:${h.host.name}`, ok: false, detail: `the hook runs isitdone ${hookVersion} but this CLI is ${VERSION}`, hint: 'npx caches the hook package separately; run `npx isitdone update` to refresh it.' });
+        }
       } else if (probe.timedOut) {
         checks.push({ name: `probe:${h.host.name}`, ok: false, detail: `hook did not answer within ${probeTimeout / 1000}s`, hint: 'first npx run downloads the package; run `npx -y @aivolution/isitdone --version` once, or `npm i -D @aivolution/isitdone` so the hook resolves locally.' });
       } else {
@@ -176,6 +184,14 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   // gitignore
   if (git.isRepo && !gitignoreCoversState(root)) {
     checks.push({ name: 'gitignore', ok: false, detail: '.isitdone/ is not ignored by git', hint: 'receipts and keys are local state; `init` adds the rule, or add ".isitdone/" to .gitignore.' });
+  }
+
+  // newer release available? (skipped silently when offline)
+  if (opts.checkLatest ?? true) {
+    const latest = latestVersion();
+    if (latest && isNewer(latest, VERSION)) {
+      checks.push({ name: 'version', ok: true, detail: `this is isitdone ${VERSION}; ${latest} is available (run \`npx isitdone update\`)` });
+    }
   }
 
   return { ok: checks.every((c) => c.ok), checks };
