@@ -13,6 +13,11 @@ beforeAll(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'isitdone-home-'));
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
+  // The suite itself may be running as an isitdone check (CI does exactly that). The nested-run guard and
+  // doctor mode must not leak into the in-process tests.
+  delete process.env.ISITDONE;
+  delete process.env.ISITDONE_DOCTOR;
+  delete process.env.ISITDONE_DEBUG;
 });
 
 afterAll(() => {
