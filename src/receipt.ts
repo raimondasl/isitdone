@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { readTextFile, writeFileAtomic } from './fsutil.js';
 import { RECEIPT_DIR, type GitInfo } from './git.js';
 import type { RunResult } from './run.js';
 import { VERSION } from './version.js';
@@ -17,7 +18,10 @@ export interface Receipt {
   profile: 'full' | 'lite';
   head: string | null;
   branch: string | null;
+  /** Working-tree hash after the checks ran. */
   tree: string;
+  /** Working-tree hash before the checks ran (checks may write files). */
+  treeBefore?: string;
   dirtyFiles: number;
   configHash: string;
   checks: RunResult[];
@@ -35,6 +39,7 @@ export interface ReceiptEvaluation {
 
 export const RECEIPT_FILE = 'receipt.json';
 const KEY_FILE = 'key';
+const KEY_RE = /^[0-9a-f]{64}$/;
 
 function dir(root: string): string {
   return join(root, RECEIPT_DIR);
@@ -51,10 +56,33 @@ export function ensureStateDir(root: string): string {
 function loadKey(root: string): string {
   const d = ensureStateDir(root);
   const f = join(d, KEY_FILE);
-  if (existsSync(f)) return readFileSync(f, 'utf8').trim();
+  const read = () => {
+    try {
+      const k = readFileSync(f, 'utf8').trim();
+      return KEY_RE.test(k) ? k : null;
+    } catch {
+      return null;
+    }
+  };
+  const existing = read();
+  if (existing) return existing;
   const key = randomBytes(32).toString('hex');
-  writeFileSync(f, key + '\n', { mode: 0o600 });
-  return key;
+  try {
+    // 'wx' fails if another process created the key first; then use theirs.
+    writeFileSync(f, key + '\n', { mode: 0o600, flag: 'wx' });
+    return key;
+  } catch {
+    for (let i = 0; i < 20; i++) {
+      const k = read();
+      if (k) return k;
+      const until = Date.now() + 10;
+      while (Date.now() < until) {
+        // brief spin: the other writer is between create and write
+      }
+    }
+    writeFileSync(f, key + '\n', { mode: 0o600 });
+    return key;
+  }
 }
 
 function canonical(r: Receipt): string {
@@ -69,17 +97,7 @@ function sign(root: string, r: Receipt): string {
 /** Hash the files that define what "the checks" are, so a loosened gate is visible in the receipt. */
 export function configHash(root: string): string {
   const h = createHash('sha256');
-  const files = [
-    '.isitdone.json',
-    'package.json',
-    'pyproject.toml',
-    'pytest.ini',
-    'setup.cfg',
-    'tox.ini',
-    'Makefile',
-    'go.mod',
-    'Cargo.toml',
-  ];
+  const files = ['.isitdone.json', 'package.json', 'pyproject.toml', 'pytest.ini', 'setup.cfg', 'tox.ini', 'Makefile', 'go.mod', 'Cargo.toml'];
   try {
     for (const e of readdirSync(root)) {
       if (/^(jest|vitest|vite|playwright|cypress|karma|mocha|ava)\.config\.[cm]?[jt]s$/.test(e) || /^\.mocharc/.test(e) || e === 'tsconfig.json' || /^eslint\.config\.[cm]?js$/.test(e)) {
@@ -94,12 +112,12 @@ export function configHash(root: string): string {
   for (const f of files.sort()) {
     const p = join(root, f);
     if (!existsSync(p)) continue;
-    let content = readFileSync(p);
+    let content: string | Buffer = readFileSync(p);
     if (f === 'package.json') {
       // Only the parts that define checks matter, not the version bump.
       try {
-        const pkg = JSON.parse(content.toString('utf8')) as Record<string, unknown>;
-        content = Buffer.from(JSON.stringify({ scripts: pkg.scripts, isitdone: pkg.isitdone, packageManager: pkg.packageManager }));
+        const pkg = JSON.parse(readTextFile(p)) as Record<string, unknown>;
+        content = JSON.stringify({ scripts: pkg.scripts, isitdone: pkg.isitdone, packageManager: pkg.packageManager });
       } catch {
         // hash raw
       }
@@ -118,7 +136,7 @@ export function writeReceipt(root: string, r: Omit<Receipt, 'version' | 'tool' |
   };
   receipt.hmac = sign(root, receipt);
   const d = ensureStateDir(root);
-  writeFileSync(join(d, RECEIPT_FILE), JSON.stringify(receipt, null, 2) + '\n');
+  writeFileAtomic(join(d, RECEIPT_FILE), JSON.stringify(receipt, null, 2) + '\n');
   return receipt;
 }
 
@@ -127,7 +145,7 @@ export function readReceipt(root: string): { receipt: Receipt | null; valid: boo
   if (!existsSync(f)) return { receipt: null, valid: false, reason: 'no receipt' };
   let receipt: Receipt;
   try {
-    receipt = JSON.parse(readFileSync(f, 'utf8')) as Receipt;
+    receipt = JSON.parse(readTextFile(f)) as Receipt;
   } catch {
     return { receipt: null, valid: false, reason: 'receipt is not valid JSON' };
   }
@@ -139,14 +157,18 @@ export function readReceipt(root: string): { receipt: Receipt | null; valid: boo
 export function evaluateReceipt(root: string, git: GitInfo, currentConfigHash: string): ReceiptEvaluation {
   const { receipt, valid, reason } = readReceipt(root);
   if (!receipt || !valid) return { state: 'NONE', receipt: null, reason };
-  if (git.tree === 'nogit' || git.tree === 'unknown') {
-    return { state: 'STALE', receipt, reason: 'working tree cannot be hashed (not a git repo), so the receipt cannot be trusted' };
+  if (git.tree === 'nogit') {
+    return { state: 'STALE', receipt, reason: 'not a git repository, so the working tree cannot be hashed and the receipt cannot be trusted' };
   }
-  if (receipt.tree !== git.tree) {
+  if (git.tree === 'unknown') {
+    return { state: 'STALE', receipt, reason: `working tree could not be hashed (${git.treeError ?? 'git error'}), so the receipt cannot be trusted` };
+  }
+  if (receipt.tree !== git.tree && receipt.treeBefore !== git.tree) {
     return { state: 'STALE', receipt, reason: `files changed since the receipt (tree ${receipt.tree.slice(0, 7)} -> ${git.tree.slice(0, 7)})` };
   }
   if (receipt.configHash !== currentConfigHash) {
     return { state: 'STALE', receipt, reason: 'check configuration changed since the receipt' };
   }
-  return { state: receipt.status, receipt, reason: receipt.status === 'PASS' ? 'all checks passed on this exact tree' : 'checks failed on this exact tree' };
+  const what = receipt.profile === 'lite' ? 'lite checks (typecheck/lint) passed on this exact tree; tests were not run' : 'all checks passed on this exact tree';
+  return { state: receipt.status, receipt, reason: receipt.status === 'PASS' ? what : 'checks failed on this exact tree' };
 }

@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { readJsonFile } from './fsutil.js';
 
 export type CheckKind = 'lite' | 'full';
 export type Profile = 'claim-gated' | 'lite' | 'full';
@@ -24,7 +25,7 @@ export interface IsitdoneConfig {
   timeout?: number;
   /** Default per-check timeout in seconds for lite checks. Default 60. */
   liteTimeout?: number;
-  /** How many times the hook may block in one session before letting the agent stop. Default 3. */
+  /** How many times the hook may block in one turn before letting the agent stop. Default 3. */
   maxAttempts?: number;
   /** Extra completion-claim regexes (case-insensitive) that trigger full checks. */
   claimPatterns?: string[];
@@ -43,28 +44,31 @@ export const CONFIG_FILE = '.isitdone.json';
 export function loadConfig(root: string): LoadedConfig {
   const file = join(root, CONFIG_FILE);
   if (existsSync(file)) {
+    let parsed: IsitdoneConfig;
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as IsitdoneConfig;
-      return { config: validate(parsed, CONFIG_FILE), source: CONFIG_FILE };
+      parsed = readJsonFile<IsitdoneConfig>(file);
     } catch (err) {
       throw new Error(`Could not parse ${CONFIG_FILE}: ${(err as Error).message}`);
     }
+    return { config: validate(parsed, CONFIG_FILE), source: CONFIG_FILE };
   }
   const pkgFile = join(root, 'package.json');
   if (existsSync(pkgFile)) {
+    let pkg: { isitdone?: IsitdoneConfig } | null = null;
     try {
-      const pkg = JSON.parse(readFileSync(pkgFile, 'utf8')) as { isitdone?: IsitdoneConfig };
-      if (pkg.isitdone && typeof pkg.isitdone === 'object') {
-        return { config: validate(pkg.isitdone, 'package.json#isitdone'), source: 'package.json#isitdone' };
-      }
+      pkg = readJsonFile<{ isitdone?: IsitdoneConfig }>(pkgFile);
     } catch {
       // package.json problems are reported by detection, not here
+    }
+    if (pkg?.isitdone && typeof pkg.isitdone === 'object') {
+      return { config: validate(pkg.isitdone, 'package.json#isitdone'), source: 'package.json#isitdone' };
     }
   }
   return { config: {}, source: null };
 }
 
 function validate(c: IsitdoneConfig, where: string): IsitdoneConfig {
+  if (c === null || typeof c !== 'object' || Array.isArray(c)) throw new Error(`${where}: must be a JSON object`);
   if (c.profile !== undefined && !['claim-gated', 'lite', 'full'].includes(c.profile)) {
     throw new Error(`${where}: profile must be one of claim-gated, lite, full`);
   }
@@ -75,12 +79,15 @@ function validate(c: IsitdoneConfig, where: string): IsitdoneConfig {
     }
   }
   if (c.checks !== undefined) {
-    if (typeof c.checks !== 'object' || Array.isArray(c.checks)) throw new Error(`${where}: checks must be an object`);
+    if (typeof c.checks !== 'object' || c.checks === null || Array.isArray(c.checks)) throw new Error(`${where}: checks must be an object`);
     for (const [id, v] of Object.entries(c.checks)) {
       if (v === false || typeof v === 'string') continue;
-      if (typeof v !== 'object' || typeof v.cmd !== 'string') throw new Error(`${where}: checks.${id} must be a string, false, or { cmd }`);
+      if (typeof v !== 'object' || v === null || typeof v.cmd !== 'string') throw new Error(`${where}: checks.${id} must be a string, false, or { cmd }`);
       if (v.kind !== undefined && v.kind !== 'lite' && v.kind !== 'full') throw new Error(`${where}: checks.${id}.kind must be lite or full`);
     }
+  }
+  if (c.claimPatterns !== undefined && (!Array.isArray(c.claimPatterns) || c.claimPatterns.some((p) => typeof p !== 'string'))) {
+    throw new Error(`${where}: claimPatterns must be an array of strings`);
   }
   return c;
 }

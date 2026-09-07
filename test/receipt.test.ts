@@ -11,7 +11,7 @@ afterEach(() => {
   repo = null;
 });
 
-const passing = (id = 'test') => ({ id, cmd: 'x', status: 'PASS' as const, exitCode: 0, durationMs: 1, tail: [], lines: 0 });
+const passing = (id = 'test') => ({ id, cmd: 'x', status: 'PASS' as const, exitCode: 0, durationMs: 1, timeoutMs: 1000, tail: [], lines: 0 });
 
 describe('gitInfo / workingTreeHash', () => {
   it('describes a clean repo and hashes the tree deterministically', () => {
@@ -22,7 +22,7 @@ describe('gitInfo / workingTreeHash', () => {
     expect(g.head).toHaveLength(40);
     expect(g.dirtyFiles).toBe(0);
     expect(g.tree).toBe(repo.git('rev-parse', 'HEAD^{tree}'));
-    expect(workingTreeHash(repo.root)).toBe(g.tree);
+    expect(workingTreeHash(repo.root)).toEqual({ tree: g.tree, error: null });
   });
 
   it('changes the tree hash for modified, new and deleted files, including untracked ones', () => {
@@ -53,6 +53,20 @@ describe('gitInfo / workingTreeHash', () => {
     const g = gitInfo(repo.root);
     expect(g.tree).toBe(clean);
     expect(g.dirtyFiles).toBe(0);
+  });
+
+  it('never writes untracked file contents into .git/objects', () => {
+    repo = tempRepo({ files: { 'a.txt': 'a\n' } });
+    const count = () => Number(/count: (\d+)/.exec(repo!.git('count-objects'))?.[1] ?? -1);
+    const before = count();
+    repo.write('.env', 'AWS_SECRET_ACCESS_KEY=hunter2\n');
+    const g = gitInfo(repo.root);
+    expect(g.dirtyPaths).toContain('.env');
+    // only tree objects may be added, never the blob of the untracked file
+    const blob = repo.git('hash-object', '.env');
+    expect(() => repo!.git('cat-file', '-e', blob)).toThrow();
+    expect(count() - before).toBeLessThanOrEqual(1);
+    expect(g.tree).toHaveLength(40);
   });
 
   it('does not touch the real index', () => {

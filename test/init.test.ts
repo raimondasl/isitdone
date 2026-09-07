@@ -25,7 +25,7 @@ describe('init', () => {
     expect((s.hooks as Record<string, unknown>).PreToolUse).toBeDefined();
     const stop = (s.hooks as Record<string, unknown[]>).Stop as Array<{ hooks: Array<{ command: string; timeout: number; type: string }> }>;
     expect(stop).toHaveLength(1);
-    expect(stop[0]?.hooks[0]).toEqual({ type: 'command', command: 'npx -y isitdone hook --host claude', timeout: 600 });
+    expect(stop[0]?.hooks[0]).toEqual({ type: 'command', command: 'npx -y @aivolution/isitdone hook --host claude', timeout: 600 });
     const again = init({ root: repo.root, hosts: ['claude'], scope: 'project' });
     expect(again[0]?.action).toBe('unchanged');
     expect(((read(path).hooks as Record<string, unknown[]>).Stop as unknown[]).length).toBe(1);
@@ -60,13 +60,13 @@ describe('init', () => {
     expect(results.map((r) => r.action)).toEqual(['added', 'added', 'added']);
 
     const codex = read(join(repo.root, '.codex', 'hooks.json'));
-    expect(codex).toEqual({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'npx -y isitdone hook --host codex', timeout: 120 }] }] } });
+    expect(codex).toEqual({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'npx -y @aivolution/isitdone hook --host codex', timeout: 120 }] }] } });
 
     const cursor = read(join(repo.root, '.cursor', 'hooks.json'));
-    expect(cursor).toEqual({ version: 1, hooks: { stop: [{ command: 'npx -y isitdone hook --host cursor', timeout: 120, loop_limit: 3 }] } });
+    expect(cursor).toEqual({ version: 1, hooks: { stop: [{ command: 'npx -y @aivolution/isitdone hook --host cursor', timeout: 120, loop_limit: null }] } });
 
     const gemini = read(join(repo.root, '.gemini', 'settings.json'));
-    expect(gemini).toEqual({ hooks: { AfterAgent: [{ matcher: '*', hooks: [{ name: 'isitdone', type: 'command', command: 'npx -y isitdone hook --host gemini', timeout: 120000 }] }] } });
+    expect(gemini).toEqual({ hooks: { AfterAgent: [{ matcher: '*', hooks: [{ name: 'isitdone', type: 'command', command: 'npx -y @aivolution/isitdone hook --host gemini', timeout: 120000 }] }] } });
 
     expect(installedHooks(root).map((h) => h.host.name)).toEqual(['codex', 'cursor', 'gemini']);
     for (const name of ['codex', 'cursor', 'gemini'] as const) {
@@ -143,7 +143,7 @@ describe('host adapters', () => {
     const x = HOSTS.codex.parse({ session_id: 'a', cwd: '/r', stop_hook_active: false, last_assistant_message: null });
     expect(x).toMatchObject({ sessionId: 'a', lastMessage: null, stopHookActive: false });
     const u = HOSTS.cursor.parse({ conversation_id: 'c', workspace_roots: ['/w'], status: 'completed', loop_count: 2 });
-    expect(u).toMatchObject({ sessionId: 'c', cwd: '/w', status: 'completed', loopCount: 2, stopHookActive: true, lastMessage: null });
+    expect(u).toMatchObject({ sessionId: 'c', cwd: '/w', status: 'completed', loopCount: 2, stopHookActive: false, lastMessage: null });
     const g = HOSTS.gemini.parse({ session_id: 'g', cwd: '/r', prompt_response: 'done', stop_hook_active: false });
     expect(g).toMatchObject({ sessionId: 'g', lastMessage: 'done' });
   });

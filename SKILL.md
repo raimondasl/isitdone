@@ -18,7 +18,7 @@ It never guesses. It runs `npm test`, `pytest`, `go test`, `cargo test`, `tsc`, 
 ## How to run it
 
 ```bash
-npx isitdone
+npx @aivolution/isitdone
 ```
 
 - Exit code `0` and a line starting with `DONE` mean every detected check passed on this exact tree, and a receipt was written to `.isitdone/receipt.json`.
@@ -28,16 +28,16 @@ npx isitdone
 Machine-readable form for scripts and orchestrators:
 
 ```bash
-npx isitdone --json      # {"ok": true|false, "done": true|false, "checks": [...]}
+npx @aivolution/isitdone --json      # {"ok": true|false, "done": true|false, "checks": [...]}
 ```
 
 ## What to do with the result
 
-1. **NOT DONE**: fix the underlying problem and run `npx isitdone` again. Do not delete, skip, `.only`, `xit`, or weaken tests, and do not change test configuration or CI settings to make the check pass. If you believe a check is wrong for this repository, say so explicitly to the user instead of working around it.
+1. **NOT DONE**: fix the underlying problem and run `npx @aivolution/isitdone` again. Do not delete, skip, `.only`, `xit`, or weaken tests, and do not change test configuration or CI settings to make the check pass. If you believe a check is wrong for this repository, say so explicitly to the user instead of working around it.
 2. **DONE**: include the receipt in your final message so the user can see the evidence:
 
 ```bash
-npx isitdone receipt --md
+npx @aivolution/isitdone receipt --md
 ```
 
 Paste that table into your completion message or the PR description.
@@ -50,6 +50,6 @@ Paste that table into your completion message or the PR description.
 
 ## Options you may need
 
-- `npx isitdone --profile lite` runs only fast checks (typecheck, lint). Use it mid-task; use the default full run before claiming completion.
-- `npx isitdone detect` shows which commands will run and where they were detected from.
+- `npx @aivolution/isitdone --profile lite` runs only fast checks (typecheck, lint). Use it mid-task; use the default full run before claiming completion.
+- `npx @aivolution/isitdone detect` shows which commands will run and where they were detected from.
 - Repository maintainers can override commands in `.isitdone.json`; do not edit that file to make checks pass.

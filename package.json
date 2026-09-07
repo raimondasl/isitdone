@@ -1,5 +1,5 @@
 {
-  "name": "isitdone",
+  "name": "@aivolution/isitdone",
   "version": "0.1.0",
   "description": "Don't let your coding agent say \"done\" until the tests actually pass. Zero-LLM Stop hook + CLI for Claude Code, Codex, Cursor and Gemini CLI.",
   "type": "module",
@@ -36,8 +36,11 @@
     "agent-skills",
     "mcp"
   ],
-  "author": "raimondasl",
+  "author": "raimondasl <raimondas@hotmail.com>",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/raimondasl/isitdone.git"

@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import type { CheckKind, IsitdoneConfig } from './config.js';
+import { readTextFile, tryReadJsonFile } from './fsutil.js';
 
 export interface Check {
   /** Stable id: test, typecheck, lint, build, or a custom key from config. */
@@ -22,6 +23,8 @@ export interface Detection {
   notes: string[];
   /** Detected stacks, e.g. ["node", "python"]. */
   stacks: string[];
+  /** Extra environment for the checks (e.g. a Python virtualenv on PATH). */
+  env: NodeJS.ProcessEnv;
 }
 
 const KIND_BY_ID: Record<string, CheckKind> = {
@@ -42,17 +45,9 @@ interface PackageJson {
   devDependencies?: Record<string, string>;
 }
 
-function readJson<T>(file: string): T | null {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8')) as T;
-  } catch {
-    return null;
-  }
-}
-
 function readText(file: string): string {
   try {
-    return readFileSync(file, 'utf8');
+    return readTextFile(file);
   } catch {
     return '';
   }
@@ -60,6 +55,29 @@ function readText(file: string): string {
 
 function has(root: string, ...names: string[]): boolean {
   return names.some((n) => existsSync(join(root, n)));
+}
+
+function isDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Find an executable on PATH without spawning anything (Windows honours PATHEXT). */
+export function onPath(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const dirs = (env[pathKey] ?? '').split(delimiter).filter(Boolean);
+  const exts = process.platform === 'win32' ? (env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').map((e) => e.toLowerCase()) : [''];
+  for (const d of dirs) {
+    for (const ext of exts) {
+      const p = join(d, name + ext);
+      if (existsSync(p)) return p;
+    }
+    if (process.platform === 'win32' && existsSync(join(d, name))) return join(d, name);
+  }
+  return null;
 }
 
 function detectPackageManager(root: string, pkg: PackageJson): PackageManager {
@@ -73,22 +91,53 @@ function detectPackageManager(root: string, pkg: PackageJson): PackageManager {
 }
 
 function runScript(pm: PackageManager, script: string): string {
-  if (script === 'test' && pm !== 'deno') return `${pm} test`;
+  // `bun test` is Bun's own runner, not the package.json script; `deno test` likewise.
+  if (script === 'test' && pm !== 'deno' && pm !== 'bun') return `${pm} test`;
   if (pm === 'npm') return `npm run ${script}`;
   if (pm === 'deno') return `deno task ${script}`;
   return `${pm} run ${script}`;
 }
 
 const NPM_DEFAULT_TEST = /echo\s+["']?Error: no test specified/i;
+const NEGATED_WATCH = /--no-watch\w*\b|--watch\w*(?:=|\s+)(?:false|0)\b|\bwatch(?:All)?\s*[:=]\s*false\b/gi;
+
+export function isWatchMode(script: string): boolean {
+  const stripped = script.replace(NEGATED_WATCH, '');
+  return /\bwatch\b/i.test(stripped) || /\bnodemon\b/.test(stripped);
+}
 
 function hasDep(pkg: PackageJson, name: string): boolean {
   return Boolean(pkg.dependencies?.[name] ?? pkg.devDependencies?.[name]);
 }
 
+/** Parse tsconfig.json leniently (comments and trailing commas are common). */
+function readTsconfig(root: string): Record<string, unknown> | null {
+  const text = readText(join(root, 'tsconfig.json'));
+  if (!text) return null;
+  const cleaned = text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:"'\\])\/\/.*$/gm, '$1')
+    .replace(/,\s*([}\]])/g, '$1');
+  try {
+    return JSON.parse(cleaned) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function isSolutionTsconfig(ts: Record<string, unknown> | null): boolean {
+  if (!ts) return false;
+  const refs = ts.references;
+  const files = ts.files;
+  const include = ts.include;
+  const emptyList = (v: unknown) => v === undefined || (Array.isArray(v) && v.length === 0);
+  return Array.isArray(refs) && refs.length > 0 && emptyList(files) && emptyList(include);
+}
+
 function detectNode(root: string, out: Detection, config: IsitdoneConfig): void {
   const pkgFile = join(root, 'package.json');
   if (!existsSync(pkgFile)) return;
-  const pkg = readJson<PackageJson>(pkgFile);
+  const pkg = tryReadJsonFile<PackageJson>(pkgFile);
   if (!pkg) {
     out.notes.push('package.json could not be parsed');
     return;
@@ -99,19 +148,23 @@ function detectNode(root: string, out: Detection, config: IsitdoneConfig): void 
   const push = (id: string, cmd: string, source = 'package.json') =>
     out.checks.push({ id, cmd, kind: KIND_BY_ID[id] ?? 'full', source });
 
-  const isWatchMode = (s: string) => /\bwatch\b/.test(s) || /\bnodemon\b/.test(s);
-
-  if (scripts.test && !NPM_DEFAULT_TEST.test(scripts.test) && !isWatchMode(scripts.test)) {
-    push('test', runScript(pm, 'test'));
-  } else if (scripts.test && NPM_DEFAULT_TEST.test(scripts.test)) {
+  if (scripts.test && NPM_DEFAULT_TEST.test(scripts.test)) {
     out.notes.push('package.json "test" script is the npm placeholder; no test check');
+  } else if (scripts.test && isWatchMode(scripts.test)) {
+    out.notes.push(`package.json "test" script looks like watch mode (${scripts.test}); set "checks": { "test": "<non-watch command>" } in .isitdone.json`);
+  } else if (scripts.test) {
+    push('test', runScript(pm, 'test'));
   }
 
   const typecheckScript = ['typecheck', 'type-check', 'types', 'tsc', 'check-types', 'check:types'].find((s) => scripts[s]);
   if (typecheckScript) {
     push('typecheck', runScript(pm, typecheckScript));
   } else if (has(root, 'tsconfig.json') && hasDep(pkg, 'typescript')) {
-    push('typecheck', pm === 'deno' ? 'deno check .' : 'npx tsc --noEmit', 'tsconfig.json');
+    if (isSolutionTsconfig(readTsconfig(root))) {
+      out.notes.push('tsconfig.json is a solution-style file (references only); "npx tsc --noEmit" would check nothing. Add a "typecheck" script (e.g. "tsc -b") to enable typechecking');
+    } else {
+      push('typecheck', pm === 'deno' ? 'deno check .' : 'npx tsc --noEmit', 'tsconfig.json');
+    }
   }
 
   const lintScript = ['lint', 'eslint', 'check:lint'].find((s) => scripts[s]);
@@ -136,6 +189,21 @@ function hasPyDep(pyproject: string, requirements: string, name: string): boolea
   return re.test(pyproject) || re.test(requirements);
 }
 
+/** If the project has a virtualenv and none is active, put it on PATH for the checks. */
+function venvEnv(root: string): { env: NodeJS.ProcessEnv; note: string | null } {
+  if (process.env.VIRTUAL_ENV) return { env: {}, note: null };
+  for (const name of ['.venv', 'venv', 'env']) {
+    const dir = join(root, name);
+    const bin = join(dir, process.platform === 'win32' ? 'Scripts' : 'bin');
+    const python = join(bin, process.platform === 'win32' ? 'python.exe' : 'python');
+    if (existsSync(python)) {
+      const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+      return { env: { VIRTUAL_ENV: dir, [pathKey]: `${bin}${delimiter}${process.env[pathKey] ?? ''}` }, note: `using virtualenv ${name}/ for Python checks` };
+    }
+  }
+  return { env: {}, note: null };
+}
+
 function detectPython(root: string, out: Detection): void {
   const pyproject = readText(join(root, 'pyproject.toml'));
   const hasPy = pyproject !== '' || has(root, 'setup.py', 'setup.cfg', 'requirements.txt', 'pytest.ini', 'tox.ini', 'Pipfile');
@@ -146,6 +214,11 @@ function detectPython(root: string, out: Detection): void {
     .join('\n');
   const setupCfg = readText(join(root, 'setup.cfg'));
   const runner = has(root, 'uv.lock') ? 'uv run ' : has(root, 'poetry.lock') ? 'poetry run ' : has(root, 'Pipfile.lock') ? 'pipenv run ' : '';
+  if (runner === '') {
+    const v = venvEnv(root);
+    Object.assign(out.env, v.env);
+    if (v.note) out.notes.push(v.note);
+  }
   const push = (id: string, cmd: string, source: string) =>
     out.checks.push({ id, cmd: runner + cmd, kind: KIND_BY_ID[id] ?? 'full', source });
 
@@ -155,13 +228,7 @@ function detectPython(root: string, out: Detection): void {
     /^\[tool:pytest\]/m.test(setupCfg) ||
     /^\[pytest\]/m.test(readText(join(root, 'tox.ini'))) ||
     hasPyDep(pyproject, requirements, 'pytest');
-  const testsDir = ['tests', 'test'].find((d) => {
-    try {
-      return statSync(join(root, d)).isDirectory();
-    } catch {
-      return false;
-    }
-  });
+  const testsDir = ['tests', 'test'].find((d) => isDir(join(root, d)));
   if (pytestConfigured || testsDir) {
     push('test', 'pytest -q', pytestConfigured ? 'pytest config' : `${testsDir}/ directory`);
   }
@@ -203,6 +270,7 @@ function detectDotnet(root: string, out: Detection): void {
   const hasProject = entries.some((e) => /\.(sln|slnx|csproj|fsproj)$/i.test(e));
   if (!hasProject) return;
   out.stacks.push('dotnet');
+  out.env.MSBUILDDISABLENODEREUSE = '1';
   out.checks.push({ id: 'build', cmd: 'dotnet build --nologo -v q', kind: 'lite', source: 'dotnet project' });
   out.checks.push({ id: 'test', cmd: 'dotnet test --nologo -v q --no-build', kind: 'full', source: 'dotnet project' });
 }
@@ -225,16 +293,26 @@ function detectMakefile(root: string, out: Detection): void {
   const targets = new Set<string>();
   for (const m of mk.matchAll(/^([A-Za-z0-9_.-]+)\s*:(?!=)/gm)) targets.add(m[1] as string);
   if (targets.size === 0) return;
-  out.stacks.push('make');
   const want: Array<[string, string[]]> = [
     ['test', ['test', 'tests', 'check']],
     ['lint', ['lint']],
     ['typecheck', ['typecheck', 'type-check', 'mypy']],
   ];
-  for (const [id, names] of want) {
-    if (out.checks.some((c) => c.id === id)) continue;
-    const t = names.find((n) => targets.has(n));
-    if (t) out.checks.push({ id, cmd: `make ${t}`, kind: KIND_BY_ID[id] ?? 'full', source: 'Makefile' });
+  const wanted = want.filter(([id, names]) => !out.checks.some((c) => c.id === id) && names.some((n) => targets.has(n)));
+  if (wanted.length === 0) return;
+  let make = 'make';
+  if (process.platform === 'win32') {
+    const found = onPath('make') ? 'make' : onPath('mingw32-make') ? 'mingw32-make' : null;
+    if (!found) {
+      out.notes.push('Makefile targets found but "make" is not on PATH; install make or set the commands in .isitdone.json');
+      return;
+    }
+    make = found;
+  }
+  out.stacks.push('make');
+  for (const [id, names] of wanted) {
+    const t = names.find((n) => targets.has(n)) as string;
+    out.checks.push({ id, cmd: `${make} ${t}`, kind: KIND_BY_ID[id] ?? 'full', source: 'Makefile' });
   }
 }
 
@@ -268,7 +346,7 @@ function order(checks: Check[]): Check[] {
 }
 
 export function detectChecks(root: string, config: IsitdoneConfig = {}): Detection {
-  const out: Detection = { checks: [], notes: [], stacks: [] };
+  const out: Detection = { checks: [], notes: [], stacks: [], env: {} };
   detectNode(root, out, config);
   detectPython(root, out);
   detectGo(root, out);

@@ -5,7 +5,7 @@
 `isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor and Gemini CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, and refuses the stop until they pass. Every run leaves a git-bound receipt you can paste into a PR.
 
 ```
-npx isitdone init
+npx @aivolution/isitdone init
 ```
 
 No API keys. No network. No telemetry. Just exit codes.
@@ -36,7 +36,7 @@ test at test/auth.test.js:14:1
   null !== 'abc'
   ...
 
-Fix the failures, then run `npx isitdone` and paste its output before claiming completion.
+Fix the failures, then run `npx @aivolution/isitdone` and paste its output before claiming completion.
 Do not skip, delete or weaken tests to make this pass; if a check is wrong for this repo,
 say so explicitly to the user.
 ```
@@ -44,7 +44,7 @@ say so explicitly to the user.
 The agent keeps working. When it genuinely finishes:
 
 ```
-$ npx isitdone
+$ npx @aivolution/isitdone
 isitdone  main@2429c82  dirty (1 file)
 
   npm run typecheck  PASS  428ms
@@ -55,7 +55,7 @@ isitdone  main@2429c82  dirty (1 file)
 ```
 
 ```
-$ npx isitdone receipt --md        # paste into the PR
+$ npx @aivolution/isitdone receipt --md        # paste into the PR
 | check | result | time |
 |---|---|---|
 | `npm run typecheck` | PASS | 428ms |
@@ -73,16 +73,16 @@ One command per host. Run it inside the repository.
 
 | Host | Command | Where it writes |
 |---|---|---|
-| Claude Code | `npx isitdone init` | `.claude/settings.json` (Stop) |
-| Codex CLI | `npx isitdone init --agent codex` | `.codex/hooks.json` (Stop), then run `/hooks` in Codex and trust it |
-| Cursor | `npx isitdone init --agent cursor` | `.cursor/hooks.json` (stop) |
-| Gemini CLI | `npx isitdone init --agent gemini` | `.gemini/settings.json` (AfterAgent) |
-| Everything | `npx isitdone init --agent all` | all of the above |
+| Claude Code | `npx @aivolution/isitdone init` | `.claude/settings.json` (Stop) |
+| Codex CLI | `npx @aivolution/isitdone init --agent codex` | `.codex/hooks.json` (Stop), then run `/hooks` in Codex and trust it |
+| Cursor | `npx @aivolution/isitdone init --agent cursor` | `.cursor/hooks.json` (stop) |
+| Gemini CLI | `npx @aivolution/isitdone init --agent gemini` | `.gemini/settings.json` (AfterAgent) |
+| Everything | `npx @aivolution/isitdone init --agent all` | all of the above |
 
 `init` detects the checks, writes the hook idempotently, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks:
 
 ```
-$ npx isitdone init
+$ npx @aivolution/isitdone init
 isitdone init  ~/work/demo-app
   detected   npm run typecheck, npm run lint, npm test
   profile    claim-gated  (lite checks on every stop, full checks when the agent claims done)
@@ -93,15 +93,15 @@ isitdone doctor  ~/work/demo-app
   ok  git            main@2429c82, 0 dirty file(s), tree 8d11d2f
   ok  config         no .isitdone.json (auto-detect only)
   ok  checks         typecheck: npm run typecheck [lite, 60s]; lint: npm run lint [lite, 60s]; test: npm test [full, 120s]
-  ok  hook:claude    Claude Code (project) .claude/settings.json -> npx -y isitdone hook --host claude
+  ok  hook:claude    Claude Code (project) .claude/settings.json -> npx -y @aivolution/isitdone hook --host claude
   ok  probe:claude   synthetic "tests pass" stop was blocked in 1.9s (decision block with reason)
 
   OK   the agent cannot claim done with failing checks in this repo
 ```
 
-Add `--user` to install into your user-level settings instead of the project. `npx isitdone uninstall` removes it. Teach the agent to run it itself with `npx skills add raimondasl/isitdone` (the [`SKILL.md`](SKILL.md) is at the repo root).
+Add `--user` to install into your user-level settings instead of the project. `npx @aivolution/isitdone uninstall` removes it. Teach the agent to run it itself with `npx skills add raimondasl/isitdone` (the [`SKILL.md`](SKILL.md) is at the repo root).
 
-Faster hooks: `npm i -D isitdone` makes `npx isitdone` resolve locally with no registry lookup.
+Faster hooks: `npm i -D @aivolution/isitdone` makes `npx @aivolution/isitdone` resolve locally with no registry lookup.
 
 ## How it decides
 
@@ -114,19 +114,19 @@ Faster hooks: `npm i -D isitdone` makes `npx isitdone` resolve locally with no r
 ## CLI
 
 ```
-npx isitdone                      run all checks, write the receipt, exit 0 (DONE) or 1 (NOT DONE)
-npx isitdone --profile lite       typecheck + lint only
-npx isitdone --json               {"ok", "done", "checks": [...]} for scripts and orchestrators
-npx isitdone --no-cache           re-run even if a PASS receipt exists for this tree
-npx isitdone --all                keep running tests even if typecheck failed
-npx isitdone receipt [--md|--json] state of the current tree: PASS | FAIL | STALE | NONE (exit 0 only on full PASS)
-npx isitdone detect [--json]      which checks would run and where they came from
-npx isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor | gemini | all | auto)
-npx isitdone doctor               prove the installed hook blocks; show detected checks and host notes
-npx isitdone uninstall            remove the hook(s)
+npx @aivolution/isitdone                      run all checks, write the receipt, exit 0 (DONE) or 1 (NOT DONE)
+npx @aivolution/isitdone --profile lite       typecheck + lint only
+npx @aivolution/isitdone --json               {"ok", "done", "checks": [...]} for scripts and orchestrators
+npx @aivolution/isitdone --no-cache           re-run even if a PASS receipt exists for this tree
+npx @aivolution/isitdone --all                keep running tests even if typecheck failed
+npx @aivolution/isitdone receipt [--md|--json] state of the current tree: PASS | FAIL | STALE | NONE (exit 0 only on full PASS)
+npx @aivolution/isitdone detect [--json]      which checks would run and where they came from
+npx @aivolution/isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor | gemini | all | auto)
+npx @aivolution/isitdone doctor               prove the installed hook blocks; show detected checks and host notes
+npx @aivolution/isitdone uninstall            remove the hook(s)
 ```
 
-For orchestrators and agent loops, `npx isitdone --json` is a done-predicate: `done` is `true` only when every full check passed on the current tree. Exit codes: `0` done, `1` not done, `3` usage or internal error.
+For orchestrators and agent loops, `npx @aivolution/isitdone --json` is a done-predicate: `done` is `true` only when every full check passed on the current tree. Exit codes: `0` done, `1` not done, `3` usage or internal error.
 
 ## Configuration
 

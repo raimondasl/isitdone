@@ -1,12 +1,14 @@
+import { join } from 'node:path';
 import type { IsitdoneConfig } from './config.js';
 import { detectChecks, type Check, type Detection } from './detect.js';
 import { gitInfo, type GitInfo } from './git.js';
 import { configHash, evaluateReceipt, writeReceipt, type Receipt, type ReceiptEvaluation } from './receipt.js';
-import { runCheck, type RunResult } from './run.js';
+import { childEnv, runCheck, type RunResult } from './run.js';
 
 export type ResolvedProfile = 'lite' | 'full';
 
 export interface VerifyOptions {
+  /** Project root (where config, checks and receipts live). */
   root: string;
   config: IsitdoneConfig;
   profile: ResolvedProfile;
@@ -44,6 +46,8 @@ export interface VerifyResult {
   before: ReceiptEvaluation;
   durationMs: number;
   claim: string | null;
+  /** Non-fatal problems (e.g. the receipt could not be written). */
+  warnings: string[];
 }
 
 export const DEFAULT_TIMEOUT_S = 120;
@@ -55,6 +59,11 @@ export function timeoutFor(check: Check, config: IsitdoneConfig): number {
   return (config.timeout ?? DEFAULT_TIMEOUT_S) * 1000;
 }
 
+/** Worst-case seconds a full run can take (for sizing the host's hook timeout). */
+export function budgetSeconds(checks: Check[], config: IsitdoneConfig): number {
+  return checks.reduce((sum, c) => sum + timeoutFor(c, config) / 1000, 0);
+}
+
 /** Does a valid receipt already prove this tree at the requested profile? */
 export function receiptSatisfies(evaluation: ReceiptEvaluation, profile: ResolvedProfile): boolean {
   if (evaluation.state !== 'PASS' || !evaluation.receipt) return false;
@@ -64,20 +73,16 @@ export function receiptSatisfies(evaluation: ReceiptEvaluation, profile: Resolve
 
 export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const started = Date.now();
-  const git = gitInfo(opts.root);
-  const root = git.root;
+  const root = opts.root;
+  const git = gitInfo(root);
   const detection = detectChecks(root, opts.config);
   const ch = configHash(root);
   const before = evaluateReceipt(root, git, ch);
   const claim = opts.claim ?? null;
+  const warnings: string[] = [];
+  if (git.treeError) warnings.push(`working tree could not be hashed (${git.treeError}); receipts cannot be cached`);
 
-  const base: Omit<VerifyResult, 'ok' | 'ran' | 'skipped' | 'receipt' | 'cached' | 'durationMs'> = {
-    git,
-    detection,
-    profile: opts.profile,
-    before,
-    claim,
-  };
+  const base = { git, detection, profile: opts.profile, before, claim, warnings };
 
   if ((opts.useCache ?? true) && receiptSatisfies(before, opts.profile)) {
     return { ...base, ok: true, ran: [], skipped: [], receipt: before.receipt, cached: true, durationMs: Date.now() - started };
@@ -93,6 +98,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     return { ...base, ok: true, ran: [], skipped, receipt: null, cached: false, durationMs: Date.now() - started };
   }
 
+  const env = childEnv(process.env, detection.env);
   const ran: RunResult[] = [];
   let liteFailed = false;
   for (const check of wanted) {
@@ -102,8 +108,9 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     }
     opts.onCheckStart?.(check);
     const result = await runCheck(check, {
-      cwd: check.cwd ? `${root}/${check.cwd}` : root,
+      cwd: check.cwd ? join(root, check.cwd) : root,
       timeoutMs: timeoutFor(check, opts.config),
+      env,
       onOutput: opts.onOutput ? (chunk) => opts.onOutput?.(check, chunk) : undefined,
     });
     ran.push(result);
@@ -113,20 +120,30 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
 
   const ok = ran.every((r) => r.status === 'PASS');
   const fullRan = detection.checks.filter((c) => c.kind === 'full').every((c) => ran.some((r) => r.id === c.id));
-  const receipt = opts.dryRun
-    ? null
-    : writeReceipt(root, {
+
+  let receipt: Receipt | null = null;
+  if (!opts.dryRun) {
+    // Checks may write files (coverage, build output). Bind the receipt to the tree as it is now,
+    // and remember the pre-run tree so either matches on the next stop.
+    const after = git.isRepo ? gitInfo(root) : git;
+    try {
+      receipt = writeReceipt(root, {
         status: ok ? 'PASS' : 'FAIL',
         profile: ok && fullRan ? 'full' : 'lite',
-        head: git.head,
-        branch: git.branch,
-        tree: git.tree,
-        dirtyFiles: git.dirtyFiles,
+        head: after.head,
+        branch: after.branch,
+        tree: after.tree,
+        treeBefore: git.tree,
+        dirtyFiles: after.dirtyFiles,
         configHash: ch,
         checks: ran,
         claim,
         host: opts.host ?? null,
       });
+    } catch (err) {
+      warnings.push(`receipt could not be written: ${(err as Error).message}`);
+    }
+  }
 
   return { ...base, ok, ran, skipped, receipt, cached: false, durationMs: Date.now() - started };
 }

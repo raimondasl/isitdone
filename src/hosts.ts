@@ -9,7 +9,7 @@
  *  - Gemini CLI:  https://geminicli.com/docs/hooks/reference/
  */
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export type HostName = 'claude' | 'codex' | 'cursor' | 'gemini';
 
@@ -18,18 +18,22 @@ export const HOST_NAMES: HostName[] = ['claude', 'codex', 'cursor', 'gemini'];
 /** Normalised view of a Stop-style hook payload. */
 export interface HookInput {
   sessionId: string | null;
+  /** Host's turn/prompt id when it provides one (diagnostics only; semantics differ per host). */
+  turnId: string | null;
   /** Directory the host reports; may be a subdirectory of the repo. */
   cwd: string | null;
   /** The agent's final message for this turn, when the host provides it. */
   lastMessage: string | null;
   /** True when the host is already continuing because a stop hook blocked. */
   stopHookActive: boolean;
-  /** Cursor: how many automatic follow-ups this conversation has had. */
+  /** Cursor: how many automatic follow-ups this conversation has had (any hook). */
   loopCount: number | null;
   /** Cursor: completed | aborted | error. */
   status: string | null;
-  /** Claude Code: number of background tasks still running (a stop with tasks running is a pause, not "done"). */
+  /** Claude Code: number of background tasks still running. */
   backgroundTasks: number;
+  /** Claude Code / Codex permission mode (plan mode cannot edit files). */
+  permissionMode: string | null;
   hookEventName: string | null;
 }
 
@@ -76,6 +80,19 @@ function arr(v: unknown): unknown[] {
 }
 function obj(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+/** Pick the workspace root that contains the process cwd (Cursor runs project hooks from the project root). */
+function pickRoot(roots: unknown[]): string | null {
+  const list = roots.filter((r): r is string => typeof r === 'string' && r !== '');
+  if (list.length === 0) return null;
+  if (list.length === 1) return list[0] as string;
+  const cwd = resolve(process.cwd()).toLowerCase();
+  const inside = list.find((r) => {
+    const rr = resolve(r).toLowerCase();
+    return cwd === rr || cwd.startsWith(rr.endsWith('\\') || rr.endsWith('/') ? rr : rr + (process.platform === 'win32' ? '\\' : '/'));
+  });
+  return inside ?? (list[0] as string);
 }
 
 /** Claude Code / Codex share the `hooks.<Event>[].hooks[]` shape. */
@@ -134,14 +151,17 @@ const claude: HostAdapter = {
   displayName: 'Claude Code',
   event: 'Stop',
   settingsPath: (root, scope) => (scope === 'project' ? join(root, '.claude', 'settings.json') : join(homedir(), '.claude', 'settings.json')),
+  // Also tolerates Cursor-shaped payloads: Cursor can run .claude/settings.json hooks when third-party configs are enabled.
   parse: (raw) => ({
     sessionId: str(raw.session_id) ?? str(raw.conversation_id),
-    cwd: str(raw.cwd) ?? str(arr(raw.workspace_roots)[0]) ?? null,
+    turnId: str(raw.prompt_id) ?? str(raw.generation_id),
+    cwd: str(raw.cwd) ?? pickRoot(arr(raw.workspace_roots)),
     lastMessage: str(raw.last_assistant_message),
-    stopHookActive: raw.stop_hook_active === true || (num(raw.loop_count) ?? 0) > 0,
+    stopHookActive: raw.stop_hook_active === true,
     loopCount: num(raw.loop_count),
     status: str(raw.status),
     backgroundTasks: arr(raw.background_tasks).length,
+    permissionMode: str(raw.permission_mode),
     hookEventName: str(raw.hook_event_name),
   }),
   allow: (systemMessage) => (systemMessage ? JSON.stringify({ systemMessage }) : ''),
@@ -169,12 +189,14 @@ const codex: HostAdapter = {
   settingsPath: (root, scope) => (scope === 'project' ? join(root, '.codex', 'hooks.json') : join(homedir(), '.codex', 'hooks.json')),
   parse: (raw) => ({
     sessionId: str(raw.session_id),
+    turnId: str(raw.turn_id),
     cwd: str(raw.cwd),
     lastMessage: str(raw.last_assistant_message),
     stopHookActive: raw.stop_hook_active === true,
     loopCount: null,
     status: null,
     backgroundTasks: 0,
+    permissionMode: str(raw.permission_mode),
     hookEventName: str(raw.hook_event_name),
   }),
   // Codex validates output strictly (no extra keys) and prefers empty stdout for "allow".
@@ -204,12 +226,15 @@ const cursor: HostAdapter = {
   settingsPath: (root, scope) => (scope === 'project' ? join(root, '.cursor', 'hooks.json') : join(homedir(), '.cursor', 'hooks.json')),
   parse: (raw) => ({
     sessionId: str(raw.conversation_id),
-    cwd: str(arr(raw.workspace_roots)[0]) ?? str(raw.cwd),
+    turnId: str(raw.generation_id),
+    cwd: pickRoot(arr(raw.workspace_roots)) ?? str(raw.cwd),
     lastMessage: str(raw.last_assistant_message) ?? str(raw.text),
-    stopHookActive: (num(raw.loop_count) ?? 0) > 0,
+    // Cursor has no per-turn flag; loop_count is per conversation. hook.ts derives continuation from its delta.
+    stopHookActive: false,
     loopCount: num(raw.loop_count),
     status: str(raw.status),
     backgroundTasks: 0,
+    permissionMode: null,
     hookEventName: str(raw.hook_event_name),
   }),
   allow: () => '{}',
@@ -227,7 +252,9 @@ const cursor: HostAdapter = {
         return true;
       }
     }
-    list.push({ command, timeout, loop_limit: 3 });
+    // loop_limit is per conversation in Cursor, so a small value would silently disable the gate later in a long
+    // session. isitdone enforces its own per-turn attempts cap instead.
+    list.push({ command, timeout, loop_limit: null });
     return true;
   },
   registered: (s) => {
@@ -247,7 +274,8 @@ const cursor: HostAdapter = {
     else hooks.stop = kept;
     return true;
   },
-  postInstallNote: 'Cursor runs project hooks only in trusted workspaces. Check the Hooks tab under Customize to confirm it loaded. Cursor does not pass the final message to stop hooks, so isitdone runs the full profile there (cached per tree).',
+  postInstallNote:
+    'Cursor runs project hooks only in trusted workspaces; check the Hooks tab under Customize. Cursor does not pass the final message to stop hooks, so isitdone runs the full profile there (cached per tree). If "Include third-party Plugins, Skills, and other configs" is enabled, Cursor also runs hooks from .claude/settings.json: keep only one registration to avoid running the checks twice.',
   synthetic: (root, message) => ({
     conversation_id: 'isitdone-doctor',
     generation_id: 'gen-1',
@@ -270,12 +298,14 @@ const gemini: HostAdapter = {
   settingsPath: (root, scope) => (scope === 'project' ? join(root, '.gemini', 'settings.json') : join(homedir(), '.gemini', 'settings.json')),
   parse: (raw) => ({
     sessionId: str(raw.session_id),
+    turnId: null,
     cwd: str(raw.cwd),
     lastMessage: str(raw.prompt_response) === '[no response text]' ? null : str(raw.prompt_response),
     stopHookActive: raw.stop_hook_active === true,
     loopCount: null,
     status: null,
     backgroundTasks: 0,
+    permissionMode: null,
     hookEventName: str(raw.hook_event_name),
   }),
   allow: (systemMessage) => JSON.stringify(systemMessage ? { decision: 'allow', systemMessage } : {}),
@@ -322,14 +352,14 @@ export function getHost(name: string): HostAdapter {
   return h;
 }
 
-/** Hosts whose settings exist in this repo or the home directory, in a stable order. */
+/** Hosts whose settings dir exists in this repo (project) or the home directory (user), in a stable order. */
 export function detectHosts(root: string, exists: (p: string) => boolean): Array<{ host: HostAdapter; scope: 'project' | 'user'; path: string }> {
   const found: Array<{ host: HostAdapter; scope: 'project' | 'user'; path: string }> = [];
   const dirs: Record<HostName, string> = { claude: '.claude', codex: '.codex', cursor: '.cursor', gemini: '.gemini' };
   for (const name of HOST_NAMES) {
     const host = HOSTS[name];
     if (exists(join(root, dirs[name]))) found.push({ host, scope: 'project', path: host.settingsPath(root, 'project') });
-    else if (exists(join(homedir(), dirs[name]))) found.push({ host, scope: 'user', path: host.settingsPath(root, 'user') });
+    if (exists(join(homedir(), dirs[name]))) found.push({ host, scope: 'user', path: host.settingsPath(root, 'user') });
   }
   return found;
 }

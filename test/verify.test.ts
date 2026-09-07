@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatBlockReason, formatMarkdown, formatReport, toJson } from '../src/report.js';
 import { plain } from '../src/output.js';
@@ -81,7 +83,28 @@ describe('verify', () => {
     expect(res.ok).toBe(true);
     expect(res.receipt).toBeNull();
     expect(formatReport(res, plain)).toMatch(/no checks detected/);
-    expect(toJson(res, 'NONE').done).toBe(true);
+    const json = toJson(res, 'NONE');
+    expect(json.done).toBe(false);
+    expect(json.noChecks).toBe(true);
+  });
+
+  it('binds the receipt to the tree after the checks ran, so a check that writes files still caches', async () => {
+    const writer = 'node -e "require(\'fs\').writeFileSync(\'coverage.txt\', String(Date.now()))"';
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: writer }) } });
+    const first = await verify({ root: repo.root, config: {}, profile: 'full' });
+    expect(first.ok).toBe(true);
+    expect(first.receipt?.treeBefore).not.toBe(first.receipt?.tree);
+    const second = await verify({ root: repo.root, config: {}, profile: 'full' });
+    expect(second.cached).toBe(true);
+  });
+
+  it('reports a warning instead of failing when the receipt cannot be written', async () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }) } });
+    writeFileSync(join(repo.root, '.isitdone'), 'a file, not a directory');
+    const res = await verify({ root: repo.root, config: {}, profile: 'full' });
+    expect(res.ok).toBe(false);
+    expect(res.receipt).toBeNull();
+    expect(res.warnings.join(' ')).toMatch(/receipt could not be written/);
   });
 
   it('honours config overrides and per-check timeouts', async () => {

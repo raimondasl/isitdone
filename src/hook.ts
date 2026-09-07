@@ -1,7 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { findClaim } from './claims.js';
 import { loadConfig, type IsitdoneConfig } from './config.js';
+import { detectChecks } from './detect.js';
+import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
 import { findRoot, RECEIPT_DIR } from './git.js';
 import { getHost, type HookInput, type HostAdapter } from './hosts.js';
 import { ensureStateDir } from './receipt.js';
@@ -11,11 +14,16 @@ import { verify, type ResolvedProfile, type VerifyResult } from './verify.js';
 export const DEFAULT_MAX_ATTEMPTS = 3;
 /** Claude Code caps hook output at 10,000 characters. */
 const MAX_REASON_CHARS = 9000;
-const STATE_FILE = 'session.json';
+const SESSIONS_DIR = 'sessions';
+const STATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface SessionState {
+  host: string;
   sessionId: string | null;
+  turnId: string | null;
   attempts: number;
+  /** Cursor: loop_count seen at the last stop. */
+  loopCount: number | null;
   lastTree: string | null;
   updatedAt: string;
 }
@@ -39,26 +47,49 @@ export interface HookOptions {
   stdin: string;
   /** Fallback directory when the payload has none. */
   cwd?: string;
-  /** Doctor mode: inject a failing check, never persist receipts or state. */
+  /** Doctor mode: run only an injected failing check, never persist receipts or state. */
   doctor?: boolean;
   /** Override the configured profile. */
   profile?: 'claim-gated' | 'lite' | 'full';
   env?: NodeJS.ProcessEnv;
 }
 
-export function readState(root: string): SessionState | null {
-  const f = join(root, RECEIPT_DIR, STATE_FILE);
-  if (!existsSync(f)) return null;
+function stateFile(root: string, host: string, sessionId: string | null): string {
+  const id = createHash('sha1').update(sessionId ?? 'anon').digest('hex').slice(0, 16);
+  return join(root, RECEIPT_DIR, SESSIONS_DIR, `${host}-${id}.json`);
+}
+
+export function readState(root: string, host: string, sessionId: string | null): SessionState | null {
+  return tryReadJsonFile<SessionState>(stateFile(root, host, sessionId));
+}
+
+/** Returns false when the state could not be persisted (the loop guard then cannot be trusted). */
+export function writeState(root: string, state: SessionState): boolean {
   try {
-    return JSON.parse(readFileSync(f, 'utf8')) as SessionState;
+    ensureStateDir(root);
+    writeFileAtomic(stateFile(root, state.host, state.sessionId), JSON.stringify(state, null, 2) + '\n');
+    pruneStates(root);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
-export function writeState(root: string, state: SessionState): void {
-  const d = ensureStateDir(root);
-  writeFileSync(join(d, STATE_FILE), JSON.stringify(state, null, 2) + '\n');
+function pruneStates(root: string): void {
+  const dir = join(root, RECEIPT_DIR, SESSIONS_DIR);
+  try {
+    const now = Date.now();
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e);
+      try {
+        if (now - statSync(p).mtimeMs > STATE_MAX_AGE_MS) rmSync(p, { force: true });
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export function parsePayload(stdin: string): Record<string, unknown> | null {
@@ -82,9 +113,23 @@ export function resolveProfile(config: IsitdoneConfig, input: HookInput, overrid
   return { profile: 'lite', claim: null, why: 'no completion claim in the final message' };
 }
 
+/**
+ * Is this stop a continuation of our own block in the same turn?
+ * Hosts with stop_hook_active say so directly. Cursor only has a per-conversation loop_count, so a continuation is
+ * "loop_count advanced by exactly one since we last blocked".
+ */
+export function isContinuation(input: HookInput, prev: SessionState | null): boolean {
+  if (input.loopCount !== null && !input.stopHookActive) {
+    return prev !== null && prev.loopCount !== null && prev.attempts > 0 && input.loopCount === prev.loopCount + 1;
+  }
+  return input.stopHookActive;
+}
+
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 20) + '\n... (truncated)';
 }
+
+const GIVE_UP_MESSAGE = (n: number) => `isitdone: checks still failing after ${n} attempt${n === 1 ? '' : 's'}; allowing the agent to stop. Run \`npx isitdone\` to see what is failing.`;
 
 /**
  * Decide whether the agent may stop. Pure with respect to process globals: reads stdin text and
@@ -93,6 +138,7 @@ function truncate(s: string, max: number): string {
 export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   const host: HostAdapter = getHost(opts.host);
   const doctor = opts.doctor ?? false;
+  const env = opts.env ?? process.env;
   const allow = (why: string, systemMessage?: string, result: VerifyResult | null = null, attempts = 0): HookOutcome => ({
     stdout: host.allow(systemMessage),
     stderr: '',
@@ -103,12 +149,15 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     attempts,
   });
 
+  // A check that itself runs isitdone (e.g. a Makefile target) must not recurse.
+  if (env.ISITDONE === '1') return allow('running nested inside an isitdone check; allowing');
+
   const raw = parsePayload(opts.stdin);
   if (!raw) return allow('stdin was not a JSON object (host bug or manual run); allowing');
   const input = host.parse(raw);
 
   if (input.status !== null && input.status !== 'completed') return allow(`host status is ${input.status}; nothing to verify`);
-  if (input.backgroundTasks > 0) return allow(`${input.backgroundTasks} background task(s) still running; this stop is a pause, not completion`);
+  if (input.permissionMode === 'plan') return allow('plan mode: the agent cannot edit files, so there is nothing to verify yet');
 
   const cwd = input.cwd && existsSync(input.cwd) ? input.cwd : (opts.cwd ?? process.cwd());
   const root = findRoot(cwd);
@@ -121,20 +170,29 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     return allow(`config error: ${(err as Error).message}`, `isitdone: ${(err as Error).message}`);
   }
   if (doctor) {
-    config = { ...config, checks: { ...(config.checks ?? {}), 'doctor-probe': { cmd: 'node -e "console.log(\'isitdone doctor: simulated failing check\'); process.exit(1)"', kind: 'lite' } } };
+    // Doctor proves the plumbing: only the injected probe runs, and it always fails.
+    if (input.stopHookActive) return allow('doctor mode never blocks twice');
+    const disabled = Object.fromEntries(detectChecks(root, config).checks.map((c) => [c.id, false as const]));
+    config = { ...config, checks: { ...disabled, 'doctor-probe': { cmd: 'node -e "console.log(\'isitdone doctor: simulated failing check\'); process.exit(1)"', kind: 'lite' } }, profile: 'full' };
   }
   const maxAttempts = config.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
 
-  const prev = readState(root);
-  let attempts = prev && prev.sessionId === input.sessionId ? prev.attempts : 0;
-  // A stop that is NOT a continuation of a stop-hook block starts a fresh turn.
-  if (!input.stopHookActive) attempts = 0;
+  const prev = doctor ? null : readState(root, host.name, input.sessionId);
+  const continuation = isContinuation(input, prev);
+  let attempts = continuation && prev ? prev.attempts : 0;
 
-  if (input.stopHookActive && attempts >= maxAttempts) {
-    return allow(`already blocked ${attempts} time(s) this turn (max ${maxAttempts}); letting the agent stop`, `isitdone: checks still failing after ${attempts} attempts; allowing the agent to stop. Run \`npx isitdone\` to see what is failing.`, null, attempts);
+  if (continuation && attempts >= maxAttempts) {
+    // Record this stop so the next one (same loop_count on Cursor) counts as a new turn.
+    if (!doctor && prev) writeState(root, { ...prev, loopCount: input.loopCount, turnId: input.turnId, updatedAt: new Date().toISOString() });
+    return allow(`already blocked ${attempts} time(s) this turn (max ${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts), null, attempts);
   }
 
   const { profile, claim, why } = resolveProfile(config, input, opts.profile);
+
+  // A stop with background tasks running and no completion claim is a pause, not "done".
+  if (input.backgroundTasks > 0 && !claim && profile === 'lite') {
+    return allow(`${input.backgroundTasks} background task(s) still running and no completion claim; treating this stop as a pause`);
+  }
 
   const result = await verify({
     root,
@@ -145,20 +203,34 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     useCache: !doctor,
     dryRun: doctor,
   });
+  const state = (n: number): SessionState => ({
+    host: host.name,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    attempts: n,
+    loopCount: input.loopCount,
+    lastTree: result.git.tree,
+    updatedAt: new Date().toISOString(),
+  });
+  const warn = result.warnings.length ? `isitdone: ${result.warnings.join('; ')}` : undefined;
 
   if (result.ok) {
-    if (!doctor) writeState(root, { sessionId: input.sessionId, attempts: 0, lastTree: result.git.tree, updatedAt: new Date().toISOString() });
-    return allow(`${result.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, undefined, result, 0);
+    if (!doctor) writeState(root, state(0));
+    return allow(`${result.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, result, 0);
   }
 
   attempts += 1;
-  if (!doctor) writeState(root, { sessionId: input.sessionId, attempts, lastTree: result.git.tree, updatedAt: new Date().toISOString() });
-  if (attempts > maxAttempts) {
-    return allow(`checks failed but attempts (${attempts}) exceed max (${maxAttempts}); letting the agent stop`, `isitdone: checks still failing after ${attempts - 1} attempts; allowing the agent to stop. Run \`npx isitdone\` to see what is failing.`, result, attempts);
+  if (!doctor && !writeState(root, state(attempts))) {
+    // Without persisted state the attempts cap cannot work; blocking could loop forever.
+    return allow('checks failed but session state could not be written; allowing to avoid an unbounded loop', `isitdone: checks failed but .isitdone/ is not writable, so the stop was allowed without enforcement. Run \`npx isitdone\` to see the failures.`, result, attempts);
   }
-  const reason = truncate(formatBlockReason(result, attempts, maxAttempts), MAX_REASON_CHARS);
+  if (attempts > maxAttempts) {
+    return allow(`checks failed but attempts (${attempts}) exceed max (${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts - 1), result, attempts);
+  }
+  let reason = formatBlockReason(result, attempts, maxAttempts);
+  if (warn) reason += `\n(${warn})`;
   return {
-    stdout: host.block(reason),
+    stdout: host.block(truncate(reason, MAX_REASON_CHARS)),
     stderr: '',
     exitCode: 0,
     decision: 'block',
@@ -177,6 +249,12 @@ export function readStdin(timeoutMs = 3000): Promise<string> {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      try {
+        process.stdin.pause();
+        process.stdin.destroy();
+      } catch {
+        // ignore
+      }
       resolve(data);
     };
     const timer = setTimeout(finish, timeoutMs);

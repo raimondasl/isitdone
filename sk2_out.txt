@@ -1,0 +1,15 @@
+lines=2 tailEntries=2 entry0len=1520
+isitdone: NOT DONE. 1 check failed on the current working tree (attempt 1/3).
+
+  node -e "process.stdout.write(process.env.T);process.exit(1)"  FAIL  exit 1
+
+--- node -e "process.stdout.write(process.env.T);process.exit(1)" (last 2 lines) ---
+   Compiling crate0 v0.1.0 (/tmp/x)
+   Compiling crate1 v0.1.0 (/tmp/x)
+   Compiling crate2 v0.1.0 (/tmp/x)
+   Compiling crate3 v0.1.0 (/tmp/x)
+   Compiling crate4 v0.1.0 (/tmp/x)
+   Compiling crat...
+error: could not compile foo
+
+Fix the failures, then run `npx isitdone` and paste its output before claiming completion. Do not skip, delete or weaken tests to make this pass; if a check is wrong for this repo, say so explicitly to the user.

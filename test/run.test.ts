@@ -42,6 +42,24 @@ describe('runCheck', () => {
     expect(Date.now() - started).toBeLessThan(15_000);
   });
 
+  it('finishes with the real exit code even when a grandchild keeps the pipes open', async () => {
+    // parent prints, spawns a detached 20s sleeper that inherits stdio, and exits 1 immediately
+    const parent = `node -e "const {spawn}=require('child_process');const c=spawn(process.execPath,['-e','setTimeout(function(){},20000)'],{stdio:'inherit',detached:true});c.unref();console.log('1 failed, 2 passed');process.exit(1)"`;
+    const started = Date.now();
+    const r = await runCheck(check(parent), { cwd, timeoutMs: 10_000 });
+    expect(r.status).toBe('FAIL');
+    expect(r.exitCode).toBe(1);
+    expect(r.summary).toBe('1 failed, 2 passed');
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('collapses carriage-return progress output to the last segment', async () => {
+    const cmd = 'node -e "process.stdout.write(\'10%\\r50%\\r100% done\\n\'); process.stdout.write(\'a\\r\\nb\\n\')"';
+    const r = await runCheck(check(cmd), { cwd, timeoutMs: 10_000 });
+    expect(r.tail).toEqual(['100% done', 'a', 'b']);
+    expect(r.lines).toBe(3);
+  });
+
   it('reports ERROR-ish failure for a missing command', async () => {
     const r = await runCheck(check('definitely-not-a-real-command-xyz --flag'), { cwd, timeoutMs: 10_000 });
     expect(['FAIL', 'ERROR']).toContain(r.status);

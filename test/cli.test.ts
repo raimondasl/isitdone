@@ -41,8 +41,21 @@ describe('cli end-to-end', () => {
     expect(cli(['--version'], process.cwd()).stdout.trim()).toBe('0.0.0-test');
     const h = cli(['--help'], process.cwd());
     expect(h.code).toBe(0);
-    expect(h.stdout).toMatch(/npx isitdone init/);
+    expect(h.stdout).toMatch(/npx @aivolution\/isitdone init/);
     expect(cli(['bogus'], process.cwd()).code).toBe(3);
+    const unknown = cli(['--nope'], process.cwd());
+    expect(unknown.code).toBe(3);
+    expect(unknown.stderr).toMatch(/unknown option --nope/);
+  });
+
+  it('refuses to run nested inside its own check, but the hook stays harmless', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
+    const nested = spawnSync(process.execPath, [BUNDLE], { cwd: repo.root, encoding: 'utf8', env: { ...process.env, ISITDONE: '1' }, windowsHide: true });
+    expect(nested.status).toBe(3);
+    expect(nested.stderr).toMatch(/nested/);
+    const hook = spawnSync(process.execPath, [BUNDLE, 'hook', '--host', 'claude'], { cwd: repo.root, encoding: 'utf8', input: '{}', env: { ...process.env, ISITDONE: '1' }, windowsHide: true });
+    expect(hook.status).toBe(0);
+    expect(hook.stdout.trim()).toBe('');
   });
 
   it('run: NOT DONE exits 1, DONE exits 0, receipt reflects it, --json is stable', () => {

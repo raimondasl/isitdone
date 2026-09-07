@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parsePayload, readState, resolveProfile, runHook } from '../src/hook.js';
-import { HOSTS } from '../src/hosts.js';
+import { isContinuation, parsePayload, readState, resolveProfile, runHook, type SessionState } from '../src/hook.js';
+import { HOSTS, type HookInput } from '../src/hosts.js';
 import { FAIL, PASS, nodePkg, tempRepo, type TempRepo } from './helpers.js';
 
 let repo: TempRepo | null = null;
@@ -18,6 +18,9 @@ function claudePayload(root: string, message: string | null, extra: Record<strin
   return JSON.stringify({ session_id: 's1', transcript_path: '/x.jsonl', cwd: root, permission_mode: 'default', hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: message, ...extra });
 }
 
+const baseInput: HookInput = { sessionId: 's', turnId: null, cwd: null, lastMessage: null, stopHookActive: false, loopCount: null, status: null, backgroundTasks: 0, permissionMode: null, hookEventName: 'Stop' };
+const state = (p: Partial<SessionState>): SessionState => ({ host: 'claude', sessionId: 's', turnId: null, attempts: 0, loopCount: null, lastTree: null, updatedAt: '', ...p });
+
 describe('parsePayload', () => {
   it('accepts objects, tolerates BOM, rejects garbage', () => {
     expect(parsePayload('{"a":1}')).toEqual({ a: 1 });
@@ -30,17 +33,31 @@ describe('parsePayload', () => {
 });
 
 describe('resolveProfile', () => {
-  const base = { sessionId: 's', cwd: null, stopHookActive: false, loopCount: null, status: null, backgroundTasks: 0, hookEventName: 'Stop' };
   it('is claim-gated by default', () => {
-    expect(resolveProfile({}, { ...base, lastMessage: DONE }).profile).toBe('full');
-    expect(resolveProfile({}, { ...base, lastMessage: QUESTION }).profile).toBe('lite');
-    expect(resolveProfile({}, { ...base, lastMessage: null }).profile).toBe('full');
+    expect(resolveProfile({}, { ...baseInput, lastMessage: DONE }).profile).toBe('full');
+    expect(resolveProfile({}, { ...baseInput, lastMessage: QUESTION }).profile).toBe('lite');
+    expect(resolveProfile({}, { ...baseInput, lastMessage: null }).profile).toBe('full');
   });
   it('honours config and overrides', () => {
-    expect(resolveProfile({ profile: 'lite' }, { ...base, lastMessage: DONE }).profile).toBe('lite');
-    expect(resolveProfile({ profile: 'full' }, { ...base, lastMessage: QUESTION }).profile).toBe('full');
-    expect(resolveProfile({ profile: 'lite' }, { ...base, lastMessage: QUESTION }, 'full').profile).toBe('full');
-    expect(resolveProfile({ claimPatterns: ['ship it'] }, { ...base, lastMessage: 'ship it' }).profile).toBe('full');
+    expect(resolveProfile({ profile: 'lite' }, { ...baseInput, lastMessage: DONE }).profile).toBe('lite');
+    expect(resolveProfile({ profile: 'full' }, { ...baseInput, lastMessage: QUESTION }).profile).toBe('full');
+    expect(resolveProfile({ profile: 'lite' }, { ...baseInput, lastMessage: QUESTION }, 'full').profile).toBe('full');
+    expect(resolveProfile({ claimPatterns: ['ship it'] }, { ...baseInput, lastMessage: 'ship it' }).profile).toBe('full');
+  });
+});
+
+describe('isContinuation', () => {
+  it('uses stop_hook_active for hosts that have it', () => {
+    expect(isContinuation({ ...baseInput, stopHookActive: true }, null)).toBe(true);
+    expect(isContinuation({ ...baseInput, stopHookActive: false }, state({ attempts: 2 }))).toBe(false);
+  });
+  it('uses the loop_count delta for Cursor', () => {
+    const cursor = { ...baseInput, loopCount: 1 };
+    expect(isContinuation(cursor, null)).toBe(false);
+    expect(isContinuation(cursor, state({ attempts: 1, loopCount: 0 }))).toBe(true);
+    expect(isContinuation(cursor, state({ attempts: 1, loopCount: 1 }))).toBe(false); // new user turn, count unchanged
+    expect(isContinuation({ ...baseInput, loopCount: 5 }, state({ attempts: 1, loopCount: 0 }))).toBe(false); // other hooks looped
+    expect(isContinuation(cursor, state({ attempts: 0, loopCount: 0 }))).toBe(false); // we did not block last time
   });
 });
 
@@ -57,7 +74,7 @@ describe('runHook (claude)', () => {
     expect(json.reason).toMatch(/npm test\s+FAIL/);
     expect(json.reason.length).toBeLessThan(9000);
     expect(o.attempts).toBe(1);
-    expect(readState(repo.root)?.attempts).toBe(1);
+    expect(readState(repo.root, 'claude', 's1')?.attempts).toBe(1);
     expect(existsSync(join(repo.root, '.isitdone', 'receipt.json'))).toBe(true);
   });
 
@@ -68,7 +85,7 @@ describe('runHook (claude)', () => {
     expect(o.stdout).toBe('');
     expect(o.result?.profile).toBe('full');
     expect(o.result?.ran.map((r) => r.id)).toEqual(['lint', 'test']);
-    expect(readState(repo.root)?.attempts).toBe(0);
+    expect(readState(repo.root, 'claude', 's1')?.attempts).toBe(0);
   });
 
   it('runs only lite checks when there is no completion claim', async () => {
@@ -114,24 +131,42 @@ describe('runHook (claude)', () => {
     expect(JSON.parse(fresh.stdout).reason).toMatch(/attempt 1\/2/);
   });
 
-  it('resets attempts for a different session id', async () => {
+  it('keeps attempts per session so two sessions cannot reset each other', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), '.isitdone.json': '{"maxAttempts": 1}' } });
-    await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE) });
-    const other = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, { session_id: 's2', stop_hook_active: true }) });
-    expect(other.decision).toBe('block');
+    expect((await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE) })).decision).toBe('block');
+    // an unrelated session stops in between
+    expect((await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, { session_id: 's2' }) })).decision).toBe('block');
+    // session 1 continues: its own counter is intact, so it is released
+    const cont = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, { stop_hook_active: true }) });
+    expect(cont.decision).toBe('allow');
+    expect(cont.why).toMatch(/letting the agent stop/);
+    const files = readdirSync(join(repo.root, '.isitdone', 'sessions'));
+    expect(files.length).toBe(2);
   });
 
-  it('allows on malformed stdin, background tasks, and broken config', async () => {
+  it('allows on malformed stdin, nested runs, plan mode, and broken config', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }) } });
     expect((await runHook({ host: 'claude', stdin: '{"last_assistant_message": "unterminated', cwd: repo.root })).decision).toBe('allow');
     expect((await runHook({ host: 'claude', stdin: '', cwd: repo.root })).decision).toBe('allow');
-    const bg = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, { background_tasks: [{ id: 't', type: 'shell', status: 'running' }] }) });
-    expect(bg.decision).toBe('allow');
-    expect(bg.why).toMatch(/background task/);
+    const nested = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE), env: { ISITDONE: '1' } });
+    expect(nested.why).toMatch(/nested/);
+    const plan = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, { permission_mode: 'plan' }) });
+    expect(plan.decision).toBe('allow');
+    expect(plan.why).toMatch(/plan mode/);
     repo.write('.isitdone.json', '{ not json');
     const broken = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE) });
     expect(broken.decision).toBe('allow');
     expect(JSON.parse(broken.stdout).systemMessage).toMatch(/Could not parse/);
+  });
+
+  it('treats background tasks as a pause only when there is no completion claim', async () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL, lint: PASS }) } });
+    const tasks = { background_tasks: [{ id: 't', type: 'shell', status: 'running', command: 'npm run dev' }] };
+    const pause = await runHook({ host: 'claude', stdin: claudePayload(repo.root, QUESTION, tasks) });
+    expect(pause.decision).toBe('allow');
+    expect(pause.why).toMatch(/pause/);
+    const claimed = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, tasks) });
+    expect(claimed.decision).toBe('block');
   });
 
   it('allows when no checks are detected', async () => {
@@ -141,11 +176,16 @@ describe('runHook (claude)', () => {
     expect(o.result?.ran).toEqual([]);
   });
 
-  it('finds the repo root from a subdirectory cwd', async () => {
+  it('finds the project root from a subdirectory cwd, and a nested project inside a bigger repo', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), 'sub/dir/file.txt': 'x' } });
     const o = await runHook({ host: 'claude', stdin: claudePayload(join(repo.root, 'sub', 'dir'), DONE) });
     expect(o.decision).toBe('block');
-    expect(o.result?.git.root.replace(/\\/g, '/')).toBe(repo.root.replace(/\\/g, '/'));
+    // a project in a subdirectory of a larger repo (dotfiles-style) is verified at the project, not the git root
+    repo.write('apps/web/package.json', nodePkg({ test: PASS }));
+    const inner = await runHook({ host: 'claude', stdin: claudePayload(join(repo.root, 'apps', 'web'), DONE) });
+    expect(inner.decision).toBe('allow');
+    expect(inner.result?.ran.map((r) => `${r.id}:${r.status}`)).toEqual(['test:PASS']);
+    expect(existsSync(join(repo.root, 'apps', 'web', '.isitdone', 'receipt.json'))).toBe(true);
   });
 
   it('tolerates Cursor-shaped input routed through the claude host', async () => {
@@ -156,13 +196,26 @@ describe('runHook (claude)', () => {
     expect(o.result?.profile).toBe('full');
   });
 
-  it('doctor mode injects a failing probe and persists nothing', async () => {
+  it('doctor mode runs only the injected probe, blocks once, and persists nothing', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
     const o = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE), doctor: true });
     expect(o.decision).toBe('block');
-    expect(JSON.parse(o.stdout).reason).toMatch(/doctor-probe|simulated failing check/);
+    expect(JSON.parse(o.stdout).reason).toMatch(/simulated failing check/);
+    expect(o.result?.ran.map((r) => r.id)).toEqual(['doctor-probe']);
     expect(existsSync(join(repo.root, '.isitdone', 'receipt.json'))).toBe(false);
-    expect(existsSync(join(repo.root, '.isitdone', 'session.json'))).toBe(false);
+    expect(existsSync(join(repo.root, '.isitdone', 'sessions'))).toBe(false);
+    const again = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE, { stop_hook_active: true }), doctor: true });
+    expect(again.decision).toBe('allow');
+  });
+
+  it('allows with a warning when session state cannot be written', async () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }) } });
+    // a regular file where the sessions directory should be
+    mkdirSync(join(repo.root, '.isitdone'), { recursive: true });
+    writeFileSync(join(repo.root, '.isitdone', 'sessions'), 'not a dir');
+    const o = await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE) });
+    expect(o.decision).toBe('allow');
+    expect(JSON.parse(o.stdout).systemMessage).toMatch(/not writable/);
   });
 });
 
@@ -180,15 +233,19 @@ describe('runHook (other hosts)', () => {
     expect(nul.result?.profile).toBe('full');
   });
 
-  it('cursor: followup_message on block, {} on allow, skips aborted turns and honours loop_count', async () => {
+  it('cursor: followup_message on block, {} on allow, skips aborted turns, and counts attempts by loop_count delta', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), '.isitdone.json': '{"maxAttempts": 1}' } });
-    const blocked = await runHook({ host: 'cursor', stdin: JSON.stringify(HOSTS.cursor.synthetic(repo.root, DONE)) });
+    const p = (loop_count: number, extra: Record<string, unknown> = {}) => JSON.stringify({ ...HOSTS.cursor.synthetic(repo!.root, DONE), loop_count, ...extra });
+    const blocked = await runHook({ host: 'cursor', stdin: p(0) });
     expect(JSON.parse(blocked.stdout).followup_message).toMatch(/NOT DONE/);
-    const aborted = await runHook({ host: 'cursor', stdin: JSON.stringify({ ...HOSTS.cursor.synthetic(repo.root, DONE), status: 'aborted' }) });
+    const aborted = await runHook({ host: 'cursor', stdin: p(1, { status: 'aborted' }) });
     expect(aborted.stdout).toBe('{}');
     expect(aborted.why).toMatch(/aborted/);
-    const looped = await runHook({ host: 'cursor', stdin: JSON.stringify({ ...HOSTS.cursor.synthetic(repo.root, DONE), loop_count: 1 }) });
+    const looped = await runHook({ host: 'cursor', stdin: p(1) }); // our follow-up: attempts 1 >= max 1
     expect(looped.decision).toBe('allow');
+    // a later user turn in the same conversation (loop_count unchanged) is a fresh turn and gets blocked again
+    const later = await runHook({ host: 'cursor', stdin: p(1) });
+    expect(later.decision).toBe('block');
   });
 
   it('gemini: deny on block, {} on allow, ignores "[no response text]"', async () => {
@@ -207,12 +264,17 @@ describe('runHook (other hosts)', () => {
   });
 });
 
-describe('state file', () => {
-  it('is JSON inside .isitdone and ignored by git', async () => {
+describe('state files', () => {
+  it('live under .isitdone/sessions, keyed by host and session, and are ignored by git', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }) } });
     await runHook({ host: 'claude', stdin: claudePayload(repo.root, DONE) });
-    const state = JSON.parse(readFileSync(join(repo.root, '.isitdone', 'session.json'), 'utf8'));
-    expect(state.sessionId).toBe('s1');
+    const dir = join(repo.root, '.isitdone', 'sessions');
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^claude-[0-9a-f]{16}\.json$/);
+    const st = JSON.parse(readFileSync(join(dir, files[0] as string), 'utf8')) as SessionState;
+    expect(st.sessionId).toBe('s1');
+    expect(st.host).toBe('claude');
     expect(repo.git('status', '--porcelain')).toBe('');
   });
 });
