@@ -165,6 +165,9 @@ describe('cli end-to-end', () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toMatch(/claude-code\s+1 session\s+1 claim\s+100%\s+verified/);
       expect(r.stdout).toMatch(/cursor\s+1 session\s+1 claim\s+100%\s+verified\s+exit codes unavailable in 1 session/);
+      const v = cli(['history', '--verbose'], repo.root, undefined, env).stdout;
+      expect(v).toMatch(/VERIFIED .*"Done, tests pass\." {2}\(no exit codes\)/);
+      expect(v).toMatch(/VERIFIED .*"All tests pass\."\n/);
       const j = JSON.parse(cli(['history', '--json'], repo.root, undefined, env).stdout);
       expect(j.byAgent).toEqual({ 'claude-code': { sessions: 1, claims: 1, verified: 1 }, cursor: { sessions: 1, claims: 1, verified: 1, lossy: 1 } });
       expect(j.cursorSource).toBe('transcripts');

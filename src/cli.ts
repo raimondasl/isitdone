@@ -247,7 +247,7 @@ async function cmdHistory(args: Args): Promise<number> {
     if (worst) out(`  worst project  ${worst.project}  ${worst.unbackedPct}% unbacked (${worst.claims} claims)`);
     if (args.flags.verbose === true) {
       out('');
-      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}`);
+      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}${c.lossy ? s.yellow('  (no exit codes)') : ''}`);
     } else {
       out('');
       out(`  ${s.dim('per project:')}`);
