@@ -6,7 +6,7 @@ import { parseSince, projectLabel, scanHistory } from '../src/history.js';
 
 let dir: string | null = null;
 afterEach(() => {
-  if (dir) rmSync(dir, { recursive: true, force: true });
+  if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   dir = null;
 });
 

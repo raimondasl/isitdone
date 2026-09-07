@@ -98,7 +98,8 @@ export function projectLabel(slug: string, cwd: string | null): string {
 }
 
 export async function scanSession(file: string, opts: { includeSubagents?: boolean; since?: Date | null }, project: { label: string; sawCwd: (cwd: string) => void }, out: ClaimRecord[], stats: { editTurns: number }): Promise<void> {
-  const rl = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  const stream = createReadStream(file, { encoding: 'utf8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
   let turn = newTurn();
   const sinceMs = opts.since ? opts.since.getTime() : 0;
   const session = basename(file, '.jsonl');
@@ -190,6 +191,13 @@ export async function scanSession(file: string, opts: { includeSubagents?: boole
     }
   }
   finalize();
+  // Release the file handle before returning (Windows cannot delete a directory with an open stream).
+  rl.close();
+  await new Promise<void>((resolve) => {
+    if (stream.destroyed || stream.closed) return resolve();
+    stream.once('close', () => resolve());
+    stream.destroy();
+  });
 }
 
 export function defaultProjectsDir(): string {
