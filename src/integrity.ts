@@ -129,6 +129,7 @@ function insideBlockComment(lang: Lang, lines: DiffLine[]): boolean[] {
     const startsInside = open;
     let rest = lang === 'py' ? l.text : stripStrings(l.text);
     let codeOutside = false;
+    let sawToken = false;
     // Walk the line token by token, toggling comment state.
     for (;;) {
       if (open) {
@@ -137,6 +138,7 @@ function insideBlockComment(lang: Lang, lines: DiffLine[]): boolean[] {
           rest = '';
           break;
         }
+        sawToken = true;
         rest = rest.slice(close + (lang === 'py' ? 3 : 2));
         open = false;
       } else {
@@ -145,12 +147,14 @@ function insideBlockComment(lang: Lang, lines: DiffLine[]): boolean[] {
           if (rest.trim() !== '') codeOutside = true;
           break;
         }
+        sawToken = true;
         if (rest.slice(0, start).trim() !== '') codeOutside = true;
         rest = rest.slice(start + (lang === 'py' ? 3 : 2));
         open = true;
       }
     }
-    out.push(startsInside && !codeOutside);
+    // Inside a comment, or a line that is nothing but comment text (including the opener line of a docstring).
+    out.push((startsInside || sawToken) && !codeOutside);
   }
   return out;
 }
@@ -347,22 +351,33 @@ const DOWNGRADES: Array<{ from: RegExp; to: RegExp; what: string; existence?: bo
   { from: /\.toMatchObject\s*\(/, to: /\.(?:toBeDefined|toBeTruthy)\s*\(/, what: 'toMatchObject -> existence check', existence: true },
   { from: /\.toMatchSnapshot\s*\(|\.toMatchInlineSnapshot\s*\(/, to: /\.(?:toBeDefined|toBeTruthy)\s*\(/, what: 'snapshot -> existence check', existence: true },
   { from: /\bassertEqual\s*\(/, to: /\bassert(?:True|IsNotNone|In)\s*\(/, what: 'assertEqual -> weaker assert' },
+  { from: /^\s*assert\s+\S.*?(?:==|!=|<=|>=|<|>)\s*\S/, to: /^\s*assert\s+(?:[\w.()\[\]'"]+)\s+is\s+not\s+None\s*$|^\s*assert\s+[\w.()\[\]'"]+\s*$|^\s*assert\s+len\s*\([^)]*\)\s*$|^\s*assert\s+\S+\s*!=\s*None\s*$/, what: 'assert x == value -> existence/truthiness check', existence: true },
   { from: /\bassertRaises\s*\(\s*\w+/, to: /\bassertRaises\s*\(\s*Exception\b/, what: 'assertRaises(Specific) -> assertRaises(Exception)' },
   { from: /\bpytest\.raises\s*\(\s*(?!Exception\b)\w+/, to: /\bpytest\.raises\s*\(\s*(?:Exception|BaseException)\b/, what: 'pytest.raises(Specific) -> raises(Exception)' },
   { from: /\b(?:assert|require)\.(?:Equal|EqualValues|Exactly|Same|ElementsMatch|Len)\s*\(/, to: /\b(?:assert|require)\.(?:NotNil|NotEmpty|True|NoError)\s*\(/, what: 'Equal -> NotNil/NotEmpty/True' },
 ];
 
-/** The value under test: `expect(x)` prefix, `self.assertX(` prefix, or for testify the last argument. */
+/**
+ * The value under test: `expect(x)` prefix; for unittest `self.assertX(first, ...)` the first argument; for a plain
+ * `assert x == y` the left operand; for testify the last argument.
+ */
 function subjectOf(lang: Lang, text: string): string {
+  const squash = (s: string) => s.replace(/\s+/g, '').slice(-60);
   if (lang === 'go') {
     const m = /\b(?:assert|require)\.\w+\s*\(([\s\S]*)\)\s*$/.exec(text.trim());
     if (m) {
       const args = splitTopLevel(m[1] as string);
-      return (args[args.length - 1] ?? '').replace(/\s+/g, '').slice(-60);
+      return squash(args[args.length - 1] ?? '');
     }
   }
+  if (lang === 'py') {
+    const u = /\bself\.assert\w+\s*\(([\s\S]*)\)\s*$/.exec(text.trim());
+    if (u) return squash(splitTopLevel(u[1] as string)[0] ?? '');
+    const plain = /^\s*assert\s+(.+?)\s*(?:==|!=|<=|>=|<|>|\bis\b|\bin\b|\bnot\b|$)/.exec(text);
+    if (plain) return squash(plain[1] as string);
+  }
   const m = /^(.*?)\.(?:to[A-Z]\w*|not)\b/.exec(text) ?? /^(.*?)\b(?:pytest\.raises|assertRaises)\s*\(/.exec(text) ?? /^(.*?)\b(?:assert\w*|require\.\w+)\s*\(/.exec(text);
-  return (m?.[1] ?? text).replace(/\s+/g, '').slice(-60);
+  return squash(m?.[1] ?? text);
 }
 
 function splitTopLevel(s: string): string[] {
@@ -468,35 +483,62 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
       const taut = lang === 'other' ? null : TAUTOLOGY[lang];
       if (taut && taut.test(code)) add(ctx, 'tautology-added', 'high', line, 'assertion that can never fail', line.text, sup);
 
+      if (lang === 'js') {
+        // expect.assertions(0), or a lowered count, lets a test pass when its assertions never run.
+        const ea = /\bexpect\.assertions\s*\(\s*(\d+)\s*\)/.exec(code);
+        if (ea) {
+          const prev = removed.map((r) => /\bexpect\.assertions\s*\(\s*(\d+)\s*\)/.exec(normalize('js', r.text))).find(Boolean);
+          const n = Number(ea[1]);
+          if (n === 0) add(ctx, 'assertion-weakened', 'high', line, 'expect.assertions(0): the test passes even if no assertion runs', line.text, sup);
+          else if (prev && n < Number(prev[1])) add(ctx, 'assertion-weakened', 'medium', line, `expect.assertions lowered ${prev[1]} -> ${n}`, line.text, sup);
+        }
+        // An assertion whose subject is a constant introduced by the same change: expect(total).toBe(42) after `const total = 42`.
+        const subj = /\bexpect\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\.(?:not\.)?to\w+\s*\(/.exec(code)?.[1];
+        if (subj) {
+          const constRe = new RegExp(`\\b(?:const|let|var)\\s+${subj.replace(/\$/g, '\\$')}\\s*=\\s*(?:-?[\\d.]+|true|false|null|["'\`]|\\[\\s*\\]|\\{\\s*\\})`);
+          if (added.some((a) => a !== line && constRe.test(normalize('js', a.text)))) add(ctx, 'tautology-added', 'high', line, `expect(${subj}) tests a constant assigned in the same change, not the code under test`, line.text, sup);
+        }
+      }
+
       if (EARLY_RETURN.test(code)) {
-        const indent = indentOf(line.text);
+        // A bare return, or a return inside an `if ... {` / `if ...:` block added just above it: the reference
+        // indentation is the if's, and the block's closing brace is skipped, so assertions after the block count.
+        let indent = indentOf(line.text);
+        let prevIdx = i - 1;
+        while (prevIdx >= 0 && ((hunk.lines[prevIdx] as DiffLine).kind === '-' || normalize(lang, (hunk.lines[prevIdx] as DiffLine).text).trim() === '')) prevIdx--;
+        const prev = prevIdx >= 0 ? (hunk.lines[prevIdx] as DiffLine) : null;
+        const guarded = !/\bif\b/.test(code) && prev !== null && prev.kind === '+' && /^\s*(?:if|elif|else if)\b.*(?:\{|:)\s*$/.test(normalize(lang, prev.text)) && indentOf(prev.text) < indent;
+        if (guarded && prev) indent = indentOf(prev.text);
         const assertRe = lang === 'other' ? null : COUNTERS[lang].assertion;
         let shadowed = false;
-        for (let j = i + 1; j < Math.min(hunk.lines.length, i + 20); j++) {
+        for (let j = i + 1; j < Math.min(hunk.lines.length, i + 24); j++) {
           const next = hunk.lines[j] as DiffLine;
           if (next.kind === '-') continue;
           const t = normalize(lang, next.text);
           if (t.trim() === '') continue;
+          if (guarded && /^\s*\}\s*$/.test(t) && indentOf(next.text) === indent) continue; // the if-block's closing brace
           if (indentOf(next.text) < indent || (lang !== 'py' && /^\s*\}/.test(t) && indentOf(next.text) <= indent)) break;
           if (assertRe && count(assertRe, t) > 0) {
             shadowed = true;
             break;
           }
         }
-        if (shadowed) add(ctx, 'early-return-added', 'high', line, 'return added before the assertions; the rest of the test never runs', line.text, sup);
+        if (shadowed) add(ctx, 'early-return-added', 'high', line, `return added before the assertions${guarded ? ' (behind a condition)' : ''}; the rest of the test never runs`, line.text, sup);
       }
 
       for (const d of DOWNGRADES) {
         if (!d.to.test(code)) continue;
-        const subj = subjectOf(lang, code);
-        const strong = removed.find((r) => d.from.test(normalize(lang, r.text)) && subjectOf(lang, normalize(lang, r.text)) === subj);
+        // Subjects are compared with string literals intact: f("a") and f("b") are different values.
+        const rawSubject = (t: string) => subjectOf(lang, stripComment(lang, t));
+        const subj = rawSubject(line.text);
+        const strong = removed.find((r) => d.from.test(normalize(lang, r.text)) && rawSubject(r.text) === subj);
         if (!strong) continue;
         // The strong assertion is still there (re-indented / reformatted): not a downgrade.
-        if (added.some((a) => a !== line && d.from.test(normalize(lang, a.text)) && subjectOf(lang, normalize(lang, a.text)) === subj)) continue;
+        if (added.some((a) => a !== line && d.from.test(normalize(lang, a.text)) && rawSubject(a.text) === subj)) continue;
         // Existence check next to stronger assertions on the same value (snapshot -> explicit fields): not a downgrade.
         if (d.existence) {
           const root = subjectRoot(subj);
-          const stronger = added.filter((a) => a !== line && STRONG_MATCHER.test(normalize(lang, a.text)) && subjectRoot(subjectOf(lang, normalize(lang, a.text))) === root);
+          const stronger = added.filter((a) => a !== line && STRONG_MATCHER.test(normalize(lang, a.text)) && subjectRoot(rawSubject(a.text)) === root);
           if (stronger.length > 0) continue;
         }
         add(ctx, 'assertion-weakened', 'medium', line, `assertion weakened: ${d.what}`, `- ${strong.text.trim()}\n+ ${line.text.trim()}`, sup);
@@ -532,6 +574,18 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
   }
 
   if (file.status === 'added') return;
+
+  // A row dropped from a table-driven test (Go struct literal, .each array row, parametrize tuple) removes a case
+  // without touching any test function or assertion.
+  const ROW = lang === 'go' ? /^\s*\{.*\},?\s*$/ : lang === 'py' ? /^\s*\(.*\),?\s*$/ : /^\s*\[.*\],?\s*$/;
+  const rowKey = (t: string) => stripComment(lang, t).replace(/\s+/g, '').replace(/,$/, '');
+  const removedRows = allRemoved.map((l) => l.text).filter((t) => ROW.test(stripComment(lang, t)) && /["'`]|\d/.test(t));
+  const addedRowKeys = new Set(allAdded.map((l) => l.text).filter((t) => ROW.test(stripComment(lang, t))).map(rowKey));
+  const droppedRows = removedRows.filter((t) => !addedRowKeys.has(rowKey(t)));
+  if (droppedRows.length > 0 && droppedRows.length > allAdded.filter((l) => ROW.test(stripComment(lang, l.text))).length - (removedRows.length - droppedRows.length)) {
+    const first = allRemoved.find((l) => l.text === droppedRows[0]);
+    add(ctx, 'test-case-removed', 'medium', first ?? null, `${droppedRows.length} row${droppedRows.length === 1 ? '' : 's'} removed from a table-driven test`, droppedRows.slice(0, 2).map((t) => t.trim()).join('\n'), first ? suppression(file.hunks.flatMap((h) => h.lines), file.hunks.flatMap((h) => h.lines).indexOf(first)) : null);
+  }
 
   // Tests removed: reconcile with tests that moved to another file in the same diff.
   const removedDecls = declarationLines(lang, allRemoved, '-');
@@ -586,7 +640,7 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
 /** Commands that actually run tests (lint/typecheck are deliberately not here). */
 const TEST_ONLY = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|tests|test:\w+|e2e)\b|\b(?:npx\s+)?(?:vitest|jest|mocha|ava|tap|node\s+--test|pytest|py\.test|python3?\s+-m\s+(?:pytest|unittest)|go\s+test|cargo\s+(?:test|nextest)|dotnet\s+test|make\s+(?:test|tests|check)|tox|nox|rspec|phpunit)\b/;
 const TEST_SCRIPT_KEY = /"(?:test|tests|test:\w+|pretest|posttest|ci|check|verify|e2e)"\s*:/;
-const BENIGN_IGNORE = /^\s*['"`]?\/?(?:node_modules|dist|build|coverage|\.next|\.nuxt|out|lib|\.git|\.cache|vendor|target|__pycache__|\.venv|venv)\/?\**['"`]?\s*$/;
+const BENIGN_IGNORE = /^\s*['"`]?(?:\*\*\/)?\/?(?:node_modules|dist|build|coverage|\.next|\.nuxt|out|lib|\.git|\.cache|vendor|target|__pycache__|\.venv|venv)(?:\/\*\*)?\/?\**['"`]?\s*$/;
 const BENIGN_PLUGINS = /-p\s+no:(?:cacheprovider|warnings|randomly|cov|faulthandler|logging|xdist)\b/;
 
 const CONFIG_SABOTAGE: Array<{ re: RegExp; severity: Severity; message: string; only?: RegExp; id?: string }> = [
@@ -594,7 +648,7 @@ const CONFIG_SABOTAGE: Array<{ re: RegExp; severity: Severity; message: string; 
   { re: /\b(?:testMatch|testRegex|include|spec)\s*[:=]/, severity: 'high', message: 'test file selection narrowed or changed', only: /(?:jest|vitest|vite|playwright|cypress|karma|mocha|ava)\.config|\.mocharc|jest\.config\.json/, id: 'selection' },
   { re: /\b(?:exclude|ignore)\s*[:=]\s*\[/, severity: 'high', message: 'test exclude list changed', only: /(?:vitest|vite|playwright)\.config|\.mocharc/, id: 'ignore' },
   { re: /--passWithNoTests|passWithNoTests\s*[:=]\s*true/, severity: 'critical', message: 'passWithNoTests: a suite with zero tests is reported green' },
-  { re: /--testPathPattern[=\s]|--testNamePattern[=\s]|\s-t\s+["']|\s--grep\s|\s-g\s+["']|go\s+test\b.*(?:\s-run\s+\S+|\s-short\b)|\bpytest\b.*\s-k\s+["']?(?!not\b)\w/, severity: 'high', message: 'test selection narrowed on the command line' },
+  { re: /--testPathPattern[=\s]|--testNamePattern[=\s]|\s-t\s+\\?["']|\s--grep[=\s]|\s-g\s+\\?["']|go\s+test\b.*(?:\s-run\s+\S+|\s-short\b)|\bpytest\b.*\s-k\s+\\?["']?(?!not\b)\w/, severity: 'high', message: 'test selection narrowed on the command line' },
   { re: /\|\|\s*true\b|\|\|\s*exit\s+0\b|;\s*true\s*["']?\s*,?\s*$|;\s*exit\s+0\s*["']?\s*,?\s*$/, severity: 'critical', message: 'exit status forced to success', id: 'exit' },
   { re: /continue-on-error\s*:\s*(?:true|\$\{\{[^}]*\}\})/, severity: 'critical', message: 'CI step failures ignored (continue-on-error)', id: 'coe' },
   { re: /^\s*if\s*:\s*(?:['"]?false['"]?|\$\{\{\s*false\s*\}\})\s*(?:#.*)?$/, severity: 'critical', message: 'CI step disabled with if: false' },
@@ -657,12 +711,21 @@ function scanConfigFile(ctx: Ctx, movedPair: boolean): void {
           while (end < hunk.lines.length && !/^\s*-\s+(?:name|run|uses)\s*:/.test((hunk.lines[end] as DiffLine).text)) end++;
           const step = hunk.lines.slice(start, end).filter((l) => l.kind !== '-').map((l) => l.text).join('\n');
           if (!TEST_ONLY.test(step)) {
-            severity = 'medium';
-            message = 'continue-on-error added to a CI step (not obviously a test step)';
+            severity = 'low';
+            message = 'continue-on-error added to a CI step that does not run tests';
           }
         }
         if (rule.id === 'ignore') {
-          const entries = quoted(text);
+          // The list may span several lines: `exclude: [` then one entry per line.
+          let entries = quoted(text);
+          if (entries.length === 0 && /[\[(]\s*$/.test(text)) {
+            for (let j = i + 1; j < Math.min(hunk.lines.length, i + 24); j++) {
+              const l = hunk.lines[j] as DiffLine;
+              if (l.kind === '-') continue;
+              entries = entries.concat(quoted(l.text));
+              if (/[\])]/.test(l.text)) break;
+            }
+          }
           if (entries.length > 0 && entries.every((e) => BENIGN_IGNORE.test(e))) continue;
         }
         if (rule.id === 'selection') {

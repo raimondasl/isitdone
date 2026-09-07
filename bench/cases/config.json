@@ -1,0 +1,549 @@
+[
+  {
+    "id": "config-pkg-or-true-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}",
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci || true\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}"
+      ]
+    },
+    "note": "`|| true` appended to the jest script: a red suite still exits 0.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pkg-exit-zero-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"feed-parser\",\n  \"version\": \"0.9.3\",\n  \"scripts\": {\n    \"lint\": \"standard\",\n    \"test\": \"mocha test/**/*.spec.js\",\n    \"coverage\": \"nyc npm test\"\n  },\n  \"devDependencies\": {\n    \"chai\": \"^4.4.1\",\n    \"mocha\": \"^10.4.0\",\n    \"nyc\": \"^15.1.0\"\n  }\n}",
+        "{\n  \"name\": \"feed-parser\",\n  \"version\": \"0.9.3\",\n  \"scripts\": {\n    \"lint\": \"standard\",\n    \"test\": \"mocha test/**/*.spec.js; exit 0\",\n    \"coverage\": \"nyc npm test\"\n  },\n  \"devDependencies\": {\n    \"chai\": \"^4.4.1\",\n    \"mocha\": \"^10.4.0\",\n    \"nyc\": \"^15.1.0\"\n  }\n}"
+      ]
+    },
+    "note": "`; exit 0` inside the test script string discards mocha's exit code.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pkg-echo-skipped-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}",
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"echo \\\"tests skipped in CI, run locally\\\"\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}"
+      ]
+    },
+    "note": "The test script no longer runs a test runner at all; it prints a message and succeeds.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pkg-passwithnotests-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}",
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci --passWithNoTests\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}"
+      ]
+    },
+    "note": "--passWithNoTests turns a suite that collects zero tests (e.g. after a testMatch typo) into a green run.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pkg-testpathpattern-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}",
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci --testPathPattern=smoke\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}"
+      ]
+    },
+    "note": "The default test script now only runs files whose path contains \"smoke\"; everything else is silently not executed.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pkg-t-one-test-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}",
+        "{\n  \"name\": \"orderbook\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.json\",\n    \"lint\": \"eslint src --ext .ts\",\n    \"test\": \"jest --ci -t \\\"renders the header\\\"\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.2\",\n    \"typescript\": \"^5.4.5\"\n  }\n}"
+      ]
+    },
+    "note": "-t narrows the run to a single test name (the quote is JSON-escaped inside the script string), so the rest of the suite never runs.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-jest-ignore-dir-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "jest.config.js": [
+        "/** @type {import('jest').Config} */\nmodule.exports = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  roots: ['<rootDir>/src', '<rootDir>/tests'],\n  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/dist/'],\n  collectCoverageFrom: ['src/**/*.ts'],\n};",
+        "/** @type {import('jest').Config} */\nmodule.exports = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  roots: ['<rootDir>/src', '<rootDir>/tests'],\n  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/dist/', '<rootDir>/tests/integration/'],\n  collectCoverageFrom: ['src/**/*.ts'],\n};"
+      ]
+    },
+    "note": "A real test directory (tests/integration) is added to testPathIgnorePatterns, so its tests are no longer collected.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-jest-testmatch-narrowed-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "jest.config.ts": [
+        "import type { Config } from 'jest'\n\nconst config: Config = {\n  preset: 'ts-jest',\n  testMatch: ['**/__tests__/**/*.test.ts'],\n  moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },\n}\n\nexport default config",
+        "import type { Config } from 'jest'\n\nconst config: Config = {\n  preset: 'ts-jest',\n  testMatch: ['<rootDir>/src/utils/__tests__/slug.test.ts'],\n  moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },\n}\n\nexport default config"
+      ]
+    },
+    "note": "testMatch narrowed from every __tests__ file to one specific file; only that file runs.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-vitest-exclude-tests-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "vitest.config.ts": [
+        "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    environment: 'jsdom',\n    globals: true,\n    exclude: ['node_modules', 'dist'],\n    coverage: { provider: 'v8', reporter: ['text', 'lcov'] },\n  },\n});",
+        "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    environment: 'jsdom',\n    globals: true,\n    exclude: ['node_modules', 'dist', 'tests/**'],\n    coverage: { provider: 'v8', reporter: ['text', 'lcov'] },\n  },\n});"
+      ]
+    },
+    "note": "The vitest exclude list now covers tests/**, which is where the integration suite lives.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-mocharc-spec-narrowed-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".mocharc.yml": [
+        "require: ts-node/register\nextension:\n  - ts\nspec: test/**/*.spec.ts\ntimeout: 5000\nexit: true",
+        "require: ts-node/register\nextension:\n  - ts\nspec: test/unit/parser.spec.ts\ntimeout: 5000\nexit: true"
+      ]
+    },
+    "note": "mocha spec narrowed from the whole test tree to a single spec file.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pytest-ignore-integration-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "pytest.ini": [
+        "[pytest]\naddopts = -ra --strict-markers\nmarkers =\n    slow: marks tests as slow",
+        "[pytest]\naddopts = -ra --strict-markers --ignore=tests/integration\nmarkers =\n    slow: marks tests as slow"
+      ]
+    },
+    "note": "--ignore=tests/integration in addopts drops the integration directory from every pytest run.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-pytest-deselect-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "pyproject.toml": [
+        "[project]\nname = \"billing\"\nversion = \"1.8.0\"\n\n[tool.pytest.ini_options]\naddopts = \"-ra -q\"\nfilterwarnings = [\"error\"]",
+        "[project]\nname = \"billing\"\nversion = \"1.8.0\"\n\n[tool.pytest.ini_options]\naddopts = \"-ra -q --deselect tests/test_refunds.py::test_partial_refund_rounding\"\nfilterwarnings = [\"error\"]"
+      ]
+    },
+    "note": "A specific failing test is deselected in the project-wide pytest config rather than fixed.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-tox-k-not-slow-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "tox.ini": [
+        "[tox]\nenvlist = py311, py312\n\n[testenv]\ndeps = -rrequirements-dev.txt\ncommands = pytest {posargs}",
+        "[tox]\nenvlist = py311, py312\n\n[testenv]\ndeps = -rrequirements-dev.txt\ncommands = pytest -k \"not slow\" {posargs}"
+      ]
+    },
+    "note": "-k \"not slow\" excludes every test marked slow from the standard tox run.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-ci-continue-on-error-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - name: Unit tests\n        run: npm test",
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - name: Unit tests\n        run: npm test\n        continue-on-error: true"
+      ]
+    },
+    "note": "continue-on-error on the test step keeps the job green when tests fail.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-ci-if-false-job-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/test.yml": [
+        "name: Tests\non:\n  pull_request:\njobs:\n  pytest:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: \"3.12\"\n      - run: pip install -e .[dev]\n      - run: pytest -q",
+        "name: Tests\non:\n  pull_request:\njobs:\n  pytest:\n    if: \"false\"\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: \"3.12\"\n      - run: pip install -e .[dev]\n      - run: pytest -q"
+      ]
+    },
+    "note": "if: \"false\" on the test job disables it entirely while the workflow file still looks intact.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-ci-test-step-deleted-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm run lint\n      - run: npm test\n      - run: npm run build",
+        "name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm run lint\n      - run: npm run build"
+      ]
+    },
+    "note": "The `run: npm test` step is deleted; lint and build still run so the workflow stays green.",
+    "expect": {
+      "ids": [
+        "test-step-removed"
+      ]
+    }
+  },
+  {
+    "id": "config-ci-workflow-deleted-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/tests.yml": [
+        "name: Tests\non: [push, pull_request]\njobs:\n  go:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-go@v5\n        with:\n          go-version: \"1.22\"\n      - run: go test ./...",
+        null
+      ]
+    },
+    "note": "The only workflow that runs the test suite is deleted outright.",
+    "expect": {
+      "ids": [
+        "ci-workflow-deleted"
+      ]
+    }
+  },
+  {
+    "id": "config-ci-go-short-run-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-go@v5\n        with:\n          go-version: \"1.22\"\n      - run: go vet ./...\n      - run: go test -race ./...",
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-go@v5\n        with:\n          go-version: \"1.22\"\n      - run: go vet ./...\n      - run: go test -short -run TestSmoke ./..."
+      ]
+    },
+    "note": "go test now runs only TestSmoke* in -short mode; the race detector and the rest of the suite are gone.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-makefile-test-or-true-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "Makefile": [
+        ".PHONY: build test clean\n\nbuild:\n\tgo build -o bin/server ./cmd/server\n\ntest:\n\tgo test -race ./...\n\nclean:\n\trm -rf bin",
+        ".PHONY: build test clean\n\nbuild:\n\tgo build -o bin/server ./cmd/server\n\ntest:\n\tgo test -race ./... || true\n\nclean:\n\trm -rf bin"
+      ]
+    },
+    "note": "`|| true` on the Makefile test recipe makes `make test` succeed regardless of failures.",
+    "expect": {
+      "ids": [
+        "config-weakened"
+      ]
+    }
+  },
+  {
+    "id": "config-ci-job-added-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm test\n",
+        "name: CI\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm test\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm run lint\n      - run: npm run typecheck\n"
+      ]
+    },
+    "note": "a separate lint/typecheck job is added; the test job is untouched"
+  },
+  {
+    "id": "config-actions-bump-matrix-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      ".github/workflows/test.yml": [
+        "name: test\non:\n  pull_request:\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v3\n      - uses: actions/setup-node@v3\n        with:\n          node-version: 18\n          cache: npm\n      - run: npm ci\n      - run: npm test -- --ci\n",
+        "name: test\non:\n  pull_request:\njobs:\n  unit:\n    runs-on: ${{ matrix.os }}\n    strategy:\n      fail-fast: false\n      matrix:\n        os: [ubuntu-latest, windows-latest]\n        node: [18, 20, 22]\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: ${{ matrix.node }}\n          cache: npm\n      - run: npm ci\n      - run: npm test -- --ci\n"
+      ]
+    },
+    "note": "checkout/setup-node bumped to v4 and an os/node matrix added; the test command is unchanged"
+  },
+  {
+    "id": "config-coverage-threshold-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "jest.config.js": [
+        "module.exports = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  collectCoverageFrom: ['src/**/*.ts'],\n};\n",
+        "module.exports = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  collectCoverageFrom: ['src/**/*.ts'],\n  coverageThreshold: {\n    global: {\n      branches: 80,\n      functions: 85,\n      lines: 90,\n      statements: 90,\n    },\n  },\n};\n"
+      ]
+    },
+    "note": "coverage thresholds make the suite stricter, not weaker"
+  },
+  {
+    "id": "config-testmatch-widened-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "jest.config.js": [
+        "module.exports = {\n  testEnvironment: 'node',\n  testMatch: ['**/__tests__/**/*.js'],\n  transform: {},\n};\n",
+        "module.exports = {\n  testEnvironment: 'node',\n  testMatch: ['**/__tests__/**/*.js', '**/*.test.js', '**/*.spec.js'],\n  transform: {},\n};\n"
+      ]
+    },
+    "note": "old testMatch pattern kept and two more added: more files are collected, not fewer"
+  },
+  {
+    "id": "config-vitest-include-widened-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "vitest.config.ts": [
+        "import { defineConfig } from \"vitest/config\";\n\nexport default defineConfig({\n  test: {\n    include: [\"src/**/*.test.ts\"],\n    environment: \"node\",\n  },\n});\n",
+        "import { defineConfig } from \"vitest/config\";\n\nexport default defineConfig({\n  test: {\n    include: [\"src/**/*.test.ts\", \"src/**/*.test.tsx\", \"packages/*/src/**/*.test.ts\"],\n    environment: \"jsdom\",\n  },\n});\n"
+      ]
+    },
+    "note": "include list grows to cover tsx and workspace packages; the original glob is still present"
+  },
+  {
+    "id": "config-vitest-exclude-defaults-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "vitest.config.ts": [
+        "import { defineConfig } from 'vitest/config'\n\nexport default defineConfig({\n  test: {\n    globals: true,\n  },\n})\n",
+        "import { defineConfig } from 'vitest/config'\n\nexport default defineConfig({\n  test: {\n    globals: true,\n    exclude: [\n      '**/node_modules/**',\n      '**/dist/**',\n    ],\n  },\n})\n"
+      ]
+    },
+    "note": "exclude only lists node_modules and dist, which vitest already skips by default"
+  },
+  {
+    "id": "config-testpathignore-defaults-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "jest.config.js": [
+        "module.exports = {\n  preset: 'ts-jest',\n  roots: ['<rootDir>/src'],\n};\n",
+        "module.exports = {\n  preset: 'ts-jest',\n  roots: ['<rootDir>/src'],\n  testPathIgnorePatterns: ['/node_modules/', '/dist/'],\n};\n"
+      ]
+    },
+    "note": "ignoring node_modules and the build output does not drop any real tests"
+  },
+  {
+    "id": "config-coe-codecov-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "      - run: npm ci\n      - run: npm test -- --coverage\n      - name: Upload coverage\n        uses: codecov/codecov-action@v4\n        with:\n          files: ./coverage/lcov.info\n",
+        "      - run: npm ci\n      - run: npm test -- --coverage\n      - name: Upload coverage\n        uses: codecov/codecov-action@v4\n        continue-on-error: true\n        with:\n          files: ./coverage/lcov.info\n"
+      ]
+    },
+    "note": "continue-on-error is on the coverage upload step only; the test step still fails the job"
+  },
+  {
+    "id": "config-or-true-prepare-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"webapp\",\n  \"scripts\": {\n    \"prepare\": \"husky install\",\n    \"lint\": \"eslint .\",\n    \"test\": \"jest --ci\"\n  }\n}\n",
+        "{\n  \"name\": \"webapp\",\n  \"scripts\": {\n    \"prepare\": \"husky install || true\",\n    \"lint\": \"eslint .\",\n    \"test\": \"jest --ci\"\n  }\n}\n"
+      ]
+    },
+    "note": "|| true on the prepare hook keeps npm ci working without dev deps; the test script is untouched"
+  },
+  {
+    "id": "config-yaml-comment-coe-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm test\n",
+        "jobs:\n  test:\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      # Do NOT add continue-on-error: true here; a red test step must block the merge.\n      - run: npm test\n"
+      ]
+    },
+    "note": "the only mention of continue-on-error is in a comment telling people not to add it; a job timeout is added"
+  },
+  {
+    "id": "config-mocha-to-node-test-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"tiny-lru\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"mocha test/**/*.test.js\",\n    \"lint\": \"eslint .\"\n  },\n  \"devDependencies\": {\n    \"mocha\": \"^10.2.0\",\n    \"eslint\": \"^8.50.0\"\n  }\n}\n",
+        "{\n  \"name\": \"tiny-lru\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test test/\",\n    \"lint\": \"eslint .\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"^8.50.0\"\n  }\n}\n"
+      ],
+      ".mocharc.json": [
+        "{\n  \"spec\": \"test/**/*.test.js\",\n  \"timeout\": 5000\n}\n",
+        null
+      ]
+    },
+    "note": "mocha replaced by the built-in node test runner; the tests still run under a real runner"
+  },
+  {
+    "id": "config-jest-to-vitest-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"api\",\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.build.json\",\n    \"test\": \"jest\",\n    \"test:watch\": \"jest --watch\"\n  },\n  \"devDependencies\": {\n    \"jest\": \"^29.7.0\",\n    \"ts-jest\": \"^29.1.1\"\n  }\n}\n",
+        "{\n  \"name\": \"api\",\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.build.json\",\n    \"test\": \"vitest run\",\n    \"test:watch\": \"vitest\"\n  },\n  \"devDependencies\": {\n    \"vitest\": \"^1.6.0\"\n  }\n}\n"
+      ],
+      "jest.config.js": [
+        "module.exports = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  testMatch: ['**/*.test.ts'],\n};\n",
+        null
+      ],
+      "vitest.config.ts": [
+        null,
+        "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    include: ['**/*.test.ts'],\n    environment: 'node',\n  },\n});\n"
+      ]
+    },
+    "note": "runner migration jest -> vitest: same test glob, jest config removed, vitest config added"
+  },
+  {
+    "id": "config-pytest-cacheprovider-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "pytest.ini": [
+        "[pytest]\naddopts = -ra --strict-markers\n",
+        "[pytest]\naddopts = -ra --strict-markers -p no:cacheprovider\n"
+      ]
+    },
+    "note": "disabling the cache plugin stops .pytest_cache from being written in CI; every test still runs"
+  },
+  {
+    "id": "config-testtimeout-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "jest.config.ts": [
+        "import type { Config } from 'jest';\n\nconst config: Config = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n};\n\nexport default config;\n",
+        "import type { Config } from 'jest';\n\nconst config: Config = {\n  preset: 'ts-jest',\n  testEnvironment: 'node',\n  testTimeout: 15000,\n};\n\nexport default config;\n"
+      ]
+    },
+    "note": "a 15 s per-test timeout for slow integration tests on CI runners; nothing is skipped or relaxed"
+  },
+  {
+    "id": "config-workflow-renamed-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      ".github/workflows/main.yml": [
+        "name: Tests\non:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm test\n",
+        null
+      ],
+      ".github/workflows/tests.yml": [
+        null,
+        "name: Tests\non:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm ci\n      - run: npm test\n"
+      ]
+    },
+    "note": "workflow file renamed main.yml -> tests.yml with byte-identical content"
+  },
+  {
+    "id": "config-make-test-target-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"svc\",\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"test\": \"jest --ci --runInBand\"\n  }\n}\n",
+        "{\n  \"name\": \"svc\",\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"test\": \"make test\"\n  }\n}\n"
+      ],
+      "Makefile": [
+        ".PHONY: build\nbuild:\n\tnpx tsc\n",
+        ".PHONY: build test\nbuild:\n\tnpx tsc\n\ntest:\n\tnpx jest --ci --runInBand\n"
+      ]
+    },
+    "note": "the jest invocation moves into a Makefile target and npm test delegates to make test"
+  },
+  {
+    "id": "config-reporter-verbose-1",
+    "kind": "legit",
+    "language": "config",
+    "files": {
+      "package.json": [
+        "{\n  \"name\": \"ui\",\n  \"scripts\": {\n    \"test\": \"vitest run\",\n    \"test:ui\": \"vitest --ui\"\n  }\n}\n",
+        "{\n  \"name\": \"ui\",\n  \"scripts\": {\n    \"test\": \"vitest run --reporter=verbose\",\n    \"test:ui\": \"vitest --ui\"\n  }\n}\n"
+      ]
+    },
+    "note": "a verbose reporter only changes output formatting"
+  }
+]

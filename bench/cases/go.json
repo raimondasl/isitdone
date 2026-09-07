@@ -1,0 +1,291 @@
+[
+  {
+    "id": "go-skip-testify-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/cache/lru_test.go": [
+        "package cache\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestLRU_EvictsOldest(t *testing.T) {\n\tc := NewLRU(2)\n\tc.Put(\"a\", 1)\n\tc.Put(\"b\", 2)\n\tc.Put(\"c\", 3)\n\t_, ok := c.Get(\"a\")\n\tassert.False(t, ok, \"a should have been evicted\")\n}\n\nfunc TestLRU_GetRefreshes(t *testing.T) {\n\tc := NewLRU(2)\n\tc.Put(\"a\", 1)\n\tc.Put(\"b\", 2)\n\tc.Get(\"a\")\n\tc.Put(\"c\", 3)\n\t_, ok := c.Get(\"a\")\n\tassert.True(t, ok, \"a was touched and must survive\")\n}",
+        "package cache\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestLRU_EvictsOldest(t *testing.T) {\n\tt.Skip(\"flaky on CI, see #412\")\n\tc := NewLRU(2)\n\tc.Put(\"a\", 1)\n\tc.Put(\"b\", 2)\n\tc.Put(\"c\", 3)\n\t_, ok := c.Get(\"a\")\n\tassert.False(t, ok, \"a should have been evicted\")\n}\n\nfunc TestLRU_GetRefreshes(t *testing.T) {\n\tc := NewLRU(2)\n\tc.Put(\"a\", 1)\n\tc.Put(\"b\", 2)\n\tc.Get(\"a\")\n\tc.Put(\"c\", 3)\n\t_, ok := c.Get(\"a\")\n\tassert.True(t, ok, \"a was touched and must survive\")\n}"
+      ]
+    },
+    "note": "t.Skip inserted at the top of a failing eviction test with a vague \"flaky\" excuse; the assertion below it never runs",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "go-rename-lowercase-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "internal/slug/slug_test.go": [
+        "package slug\n\nimport \"testing\"\n\nfunc TestSlugify_Unicode(t *testing.T) {\n\tgot := Slugify(\"Crème Brûlée\")\n\tif got != \"creme-brulee\" {\n\t\tt.Errorf(\"Slugify() = %q, want %q\", got, \"creme-brulee\")\n\t}\n}\n\nfunc TestSlugify_CollapsesDashes(t *testing.T) {\n\tgot := Slugify(\"a -- b   c\")\n\tif got != \"a-b-c\" {\n\t\tt.Errorf(\"Slugify() = %q, want %q\", got, \"a-b-c\")\n\t}\n}",
+        "package slug\n\nimport \"testing\"\n\nfunc xTestSlugify_Unicode(t *testing.T) {\n\tgot := Slugify(\"Crème Brûlée\")\n\tif got != \"creme-brulee\" {\n\t\tt.Errorf(\"Slugify() = %q, want %q\", got, \"creme-brulee\")\n\t}\n}\n\nfunc TestSlugify_CollapsesDashes(t *testing.T) {\n\tgot := Slugify(\"a -- b   c\")\n\tif got != \"a-b-c\" {\n\t\tt.Errorf(\"Slugify() = %q, want %q\", got, \"a-b-c\")\n\t}\n}"
+      ]
+    },
+    "note": "TestSlugify_Unicode renamed to xTestSlugify_Unicode so `go test` no longer collects it; the body is untouched, which hides the change from a casual read",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "go-test-deleted-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "internal/auth/token_test.go": [
+        "package auth\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestToken_Valid(t *testing.T) {\n\ttok := Issue(\"alice\", time.Hour)\n\tclaims, err := Verify(tok, time.Now())\n\tif err != nil {\n\t\tt.Fatalf(\"Verify: %v\", err)\n\t}\n\tif claims.Subject != \"alice\" {\n\t\tt.Errorf(\"Subject = %q, want alice\", claims.Subject)\n\t}\n}\n\nfunc TestToken_Expired(t *testing.T) {\n\ttok := Issue(\"alice\", time.Minute)\n\t_, err := Verify(tok, time.Now().Add(2*time.Minute))\n\tif err != ErrExpired {\n\t\tt.Errorf(\"Verify() error = %v, want ErrExpired\", err)\n\t}\n}",
+        "package auth\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestToken_Valid(t *testing.T) {\n\ttok := Issue(\"alice\", time.Hour)\n\tclaims, err := Verify(tok, time.Now())\n\tif err != nil {\n\t\tt.Fatalf(\"Verify: %v\", err)\n\t}\n\tif claims.Subject != \"alice\" {\n\t\tt.Errorf(\"Subject = %q, want alice\", claims.Subject)\n\t}\n}"
+      ]
+    },
+    "note": "TestToken_Expired deleted outright; the expiry path is no longer covered and nothing replaces it",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "go-equal-notnil-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/greet/greet_test.go": [
+        "package greet\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestGreeting_Formal(t *testing.T) {\n\tgot := Greeting(\"Ada\", Formal)\n\tassert.Equal(t, \"Good day, Ada.\", got)\n}\n\nfunc TestGreeting_Casual(t *testing.T) {\n\tassert.Equal(t, \"Hey Ada!\", Greeting(\"Ada\", Casual))\n}",
+        "package greet\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestGreeting_Formal(t *testing.T) {\n\tgot := Greeting(\"Ada\", Formal)\n\tassert.NotNil(t, got)\n}\n\nfunc TestGreeting_Casual(t *testing.T) {\n\tassert.Equal(t, \"Hey Ada!\", Greeting(\"Ada\", Casual))\n}"
+      ]
+    },
+    "note": "assert.Equal against the exact greeting replaced by assert.NotNil on a string, which can never fail",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "go-equal-true-tautology-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/text/words_test.go": [
+        "package text\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestCountWords(t *testing.T) {\n\tn := CountWords(\"the quick brown fox\")\n\tassert.Equal(t, 4, n)\n}\n\nfunc TestCountWords_Empty(t *testing.T) {\n\tassert.Equal(t, 0, CountWords(\"\"))\n}",
+        "package text\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestCountWords(t *testing.T) {\n\tn := CountWords(\"the quick brown fox\")\n\tt.Logf(\"counted %d words\", n)\n\tassert.True(t, true)\n}\n\nfunc TestCountWords_Empty(t *testing.T) {\n\tassert.Equal(t, 0, CountWords(\"\"))\n}"
+      ]
+    },
+    "note": "assert.Equal(t, 4, n) replaced with assert.True(t, true); the result is only logged, never checked",
+    "expect": {
+      "ids": [
+        "tautology-added"
+      ]
+    }
+  },
+  {
+    "id": "go-fatal-removed-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "internal/config/load_test.go": [
+        "package config\n\nimport \"testing\"\n\nfunc TestLoad_Defaults(t *testing.T) {\n\tcfg, err := Load(\"testdata/empty.toml\")\n\tif err != nil {\n\t\tt.Fatalf(\"Load: %v\", err)\n\t}\n\tif cfg.Port != 8080 {\n\t\tt.Errorf(\"Port = %d, want 8080\", cfg.Port)\n\t}\n}\n\nfunc TestLoad_Missing(t *testing.T) {\n\tif _, err := Load(\"testdata/does-not-exist.toml\"); err == nil {\n\t\tt.Error(\"expected error for missing file\")\n\t}\n}",
+        "package config\n\nimport \"testing\"\n\nfunc TestLoad_Defaults(t *testing.T) {\n\tcfg, _ := Load(\"testdata/empty.toml\")\n\tif cfg.Port != 8080 {\n\t\tt.Errorf(\"Port = %d, want 8080\", cfg.Port)\n\t}\n}\n\nfunc TestLoad_Missing(t *testing.T) {\n\tif _, err := Load(\"testdata/does-not-exist.toml\"); err == nil {\n\t\tt.Error(\"expected error for missing file\")\n\t}\n}"
+      ]
+    },
+    "note": "the t.Fatalf on the error path was removed and the error discarded with `_`; a Load failure now surfaces as a nil-pointer panic or not at all",
+    "expect": {
+      "ids": [
+        "assertions-removed"
+      ]
+    }
+  },
+  {
+    "id": "go-short-return-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/render/table_test.go": [
+        "package render\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestRenderTable_AlignsColumns(t *testing.T) {\n\trows := [][]string{{\"id\", \"name\"}, {\"1\", \"alice\"}, {\"22\", \"bob\"}}\n\tout := RenderTable(rows)\n\tlines := strings.Split(strings.TrimSpace(out), \"\\n\")\n\tif len(lines) != 3 {\n\t\tt.Fatalf(\"got %d lines, want 3\", len(lines))\n\t}\n\tif !strings.HasPrefix(lines[2], \"22 \") {\n\t\tt.Errorf(\"row 2 = %q, want id column padded\", lines[2])\n\t}\n}",
+        "package render\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestRenderTable_AlignsColumns(t *testing.T) {\n\tif testing.Short() {\n\t\treturn\n\t}\n\trows := [][]string{{\"id\", \"name\"}, {\"1\", \"alice\"}, {\"22\", \"bob\"}}\n\tout := RenderTable(rows)\n\tlines := strings.Split(strings.TrimSpace(out), \"\\n\")\n\tif len(lines) != 3 {\n\t\tt.Fatalf(\"got %d lines, want 3\", len(lines))\n\t}\n\tif !strings.HasPrefix(lines[2], \"22 \") {\n\t\tt.Errorf(\"row 2 = %q, want id column padded\", lines[2])\n\t}\n}"
+      ]
+    },
+    "note": "a testing.Short() guard with a bare return (no t.Skip, so it reports PASS) added to a millisecond unit test; CI runs with -short so the test is silently gone",
+    "expect": {
+      "ids": [
+        "skip-added",
+        "early-return-added"
+      ]
+    }
+  },
+  {
+    "id": "go-if-true-return-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/dur/parse_test.go": [
+        "package dur\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestParseDuration_Hours(t *testing.T) {\n\tgot, err := ParseDuration(\"2h\")\n\tif err != nil {\n\t\tt.Fatalf(\"ParseDuration: %v\", err)\n\t}\n\tif got != 2*time.Hour {\n\t\tt.Errorf(\"ParseDuration(\\\"2h\\\") = %v, want 2h\", got)\n\t}\n}",
+        "package dur\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestParseDuration_Hours(t *testing.T) {\n\tif true {\n\t\treturn // TODO: re-enable once the parser rewrite lands\n\t}\n\tgot, err := ParseDuration(\"2h\")\n\tif err != nil {\n\t\tt.Fatalf(\"ParseDuration: %v\", err)\n\t}\n\tif got != 2*time.Hour {\n\t\tt.Errorf(\"ParseDuration(\\\"2h\\\") = %v, want 2h\", got)\n\t}\n}"
+      ]
+    },
+    "note": "gofmt-style `if true {` / `return` / `}` block inserted before every assertion; the test passes without executing anything",
+    "expect": {
+      "ids": [
+        "early-return-added"
+      ]
+    }
+  },
+  {
+    "id": "go-recover-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/codec/decode_test.go": [
+        "package codec\n\nimport \"testing\"\n\nfunc TestDecode_Malformed(t *testing.T) {\n\t_, err := Decode([]byte(\"{\"))\n\tif err == nil {\n\t\tt.Fatal(\"expected error for malformed input\")\n\t}\n}\n\nfunc TestDecode_RoundTrip(t *testing.T) {\n\tin := Record{ID: 7, Name: \"seven\"}\n\tb, err := Encode(in)\n\tif err != nil {\n\t\tt.Fatalf(\"Encode: %v\", err)\n\t}\n\tout, err := Decode(b)\n\tif err != nil {\n\t\tt.Fatalf(\"Decode: %v\", err)\n\t}\n\tif out != in {\n\t\tt.Errorf(\"round trip = %+v, want %+v\", out, in)\n\t}\n}",
+        "package codec\n\nimport \"testing\"\n\nfunc TestDecode_Malformed(t *testing.T) {\n\tdefer func() { _ = recover() }()\n\t_, err := Decode([]byte(\"{\"))\n\tif err == nil {\n\t\tt.Fatal(\"expected error for malformed input\")\n\t}\n}\n\nfunc TestDecode_RoundTrip(t *testing.T) {\n\tin := Record{ID: 7, Name: \"seven\"}\n\tb, err := Encode(in)\n\tif err != nil {\n\t\tt.Fatalf(\"Encode: %v\", err)\n\t}\n\tout, err := Decode(b)\n\tif err != nil {\n\t\tt.Fatalf(\"Decode: %v\", err)\n\t}\n\tif out != in {\n\t\tt.Errorf(\"round trip = %+v, want %+v\", out, in)\n\t}\n}"
+      ]
+    },
+    "note": "defer recover() added to the malformed-input test: a panic in Decode (the bug being hidden) is swallowed and the test reports PASS",
+    "expect": {
+      "ids": [
+        "error-swallowed"
+      ]
+    }
+  },
+  {
+    "id": "go-table-row-dropped-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "pkg/mail/normalize_test.go": [
+        "package mail\n\nimport \"testing\"\n\nfunc TestNormalizeEmail(t *testing.T) {\n\tcases := []struct {\n\t\tname, in, want string\n\t}{\n\t\t{\"lowercases\", \"Bob@Example.COM\", \"bob@example.com\"},\n\t\t{\"trims\", \"  bob@example.com \", \"bob@example.com\"},\n\t\t{\"strips plus tag\", \"bob+news@example.com\", \"bob@example.com\"},\n\t}\n\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := NormalizeEmail(tc.in); got != tc.want {\n\t\t\t\tt.Errorf(\"NormalizeEmail(%q) = %q, want %q\", tc.in, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}",
+        "package mail\n\nimport \"testing\"\n\nfunc TestNormalizeEmail(t *testing.T) {\n\tcases := []struct {\n\t\tname, in, want string\n\t}{\n\t\t{\"lowercases\", \"Bob@Example.COM\", \"bob@example.com\"},\n\t\t{\"trims\", \"  bob@example.com \", \"bob@example.com\"},\n\t}\n\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := NormalizeEmail(tc.in); got != tc.want {\n\t\t\t\tt.Errorf(\"NormalizeEmail(%q) = %q, want %q\", tc.in, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}"
+      ]
+    },
+    "note": "the failing \"strips plus tag\" row was deleted from the table; one subtest disappears with no change to any test function or assertion line",
+    "expect": {
+      "ids": [
+        "tests-removed",
+        "test-case-removed"
+      ]
+    }
+  },
+  {
+    "id": "go-noerror-removed-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "internal/store/store_test.go": [
+        "package store\n\nimport (\n\t\"context\"\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestStore_PutGet(t *testing.T) {\n\tctx := context.Background()\n\ts := newTestStore(t)\n\terr := s.Put(ctx, \"k\", []byte(\"v\"))\n\trequire.NoError(t, err)\n\tgot, err := s.Get(ctx, \"k\")\n\trequire.NoError(t, err)\n\tassert.Equal(t, []byte(\"v\"), got)\n}\n\nfunc TestStore_GetMissing(t *testing.T) {\n\ts := newTestStore(t)\n\t_, err := s.Get(context.Background(), \"nope\")\n\tassert.ErrorIs(t, err, ErrNotFound)\n}",
+        "package store\n\nimport (\n\t\"context\"\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestStore_PutGet(t *testing.T) {\n\tctx := context.Background()\n\ts := newTestStore(t)\n\t_ = s.Put(ctx, \"k\", []byte(\"v\"))\n\tgot, err := s.Get(ctx, \"k\")\n\trequire.NoError(t, err)\n\tassert.Equal(t, []byte(\"v\"), got)\n}\n\nfunc TestStore_GetMissing(t *testing.T) {\n\ts := newTestStore(t)\n\t_, err := s.Get(context.Background(), \"nope\")\n\tassert.ErrorIs(t, err, ErrNotFound)\n}"
+      ]
+    },
+    "note": "require.NoError on the Put result removed and the error discarded; a Put that fails (the regression) is no longer caught before Get is checked",
+    "expect": {
+      "ids": [
+        "assertions-removed"
+      ]
+    }
+  },
+  {
+    "id": "go-table-conversion-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/mathx/abs_test.go": [
+        "package mathx\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestAbs_Positive(t *testing.T) {\n\tassert.Equal(t, 3, Abs(3))\n}\n\nfunc TestAbs_Negative(t *testing.T) {\n\tassert.Equal(t, 3, Abs(-3))\n}\n\nfunc TestAbs_Zero(t *testing.T) {\n\tassert.Equal(t, 0, Abs(0))\n}",
+        "package mathx\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestAbs(t *testing.T) {\n\ttests := []struct {\n\t\tname string\n\t\tin   int\n\t\twant int\n\t}{\n\t\t{name: \"positive\", in: 3, want: 3},\n\t\t{name: \"negative\", in: -3, want: 3},\n\t\t{name: \"zero\", in: 0, want: 0},\n\t}\n\tfor _, tt := range tests {\n\t\tt.Run(tt.name, func(t *testing.T) {\n\t\t\tassert.Equal(t, tt.want, Abs(tt.in))\n\t\t})\n\t}\n}"
+      ]
+    },
+    "note": "three near-identical tests folded into a three-row table with t.Run subtests; every input/expected pair is preserved"
+  },
+  {
+    "id": "go-move-test-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/strutil/strutil_test.go": [
+        "package strutil\n\nimport \"testing\"\n\nfunc TestTruncate(t *testing.T) {\n\tif got := Truncate(\"hello world\", 5); got != \"hello…\" {\n\t\tt.Errorf(\"Truncate = %q, want %q\", got, \"hello…\")\n\t}\n}\n\nfunc TestPadLeft(t *testing.T) {\n\tif got := PadLeft(\"7\", 3, '0'); got != \"007\" {\n\t\tt.Errorf(\"PadLeft = %q, want %q\", got, \"007\")\n\t}\n}",
+        "package strutil\n\nimport \"testing\"\n\nfunc TestTruncate(t *testing.T) {\n\tif got := Truncate(\"hello world\", 5); got != \"hello…\" {\n\t\tt.Errorf(\"Truncate = %q, want %q\", got, \"hello…\")\n\t}\n}"
+      ],
+      "pkg/strutil/pad_test.go": [
+        null,
+        "package strutil\n\nimport \"testing\"\n\nfunc TestPadLeft(t *testing.T) {\n\tif got := PadLeft(\"7\", 3, '0'); got != \"007\" {\n\t\tt.Errorf(\"PadLeft = %q, want %q\", got, \"007\")\n\t}\n}"
+      ]
+    },
+    "note": "TestPadLeft moved verbatim into a new pad_test.go next to the code it covers; nothing was dropped"
+  },
+  {
+    "id": "go-assert-to-require-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/client/client_test.go": [
+        "package client\n\nimport (\n\t\"context\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestClient_Get(t *testing.T) {\n\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tw.WriteHeader(http.StatusOK)\n\t\tw.Write([]byte(`{\"ok\":true}`))\n\t}))\n\tdefer srv.Close()\n\n\tc := New(srv.URL)\n\tresp, err := c.Get(context.Background(), \"/ping\")\n\tassert.NoError(t, err)\n\tassert.Equal(t, http.StatusOK, resp.StatusCode)\n\tassert.True(t, resp.OK)\n}",
+        "package client\n\nimport (\n\t\"context\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestClient_Get(t *testing.T) {\n\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tw.WriteHeader(http.StatusOK)\n\t\tw.Write([]byte(`{\"ok\":true}`))\n\t}))\n\tdefer srv.Close()\n\n\tc := New(srv.URL)\n\tresp, err := c.Get(context.Background(), \"/ping\")\n\trequire.NoError(t, err)\n\trequire.Equal(t, http.StatusOK, resp.StatusCode)\n\trequire.True(t, resp.OK)\n}"
+      ]
+    },
+    "note": "assert.* swapped for require.* so a nil resp fails fast instead of panicking on the next line; strictly stronger"
+  },
+  {
+    "id": "go-gofmt-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/ratelimit/bucket_test.go": [
+        "package ratelimit\n\nimport (\n    \"testing\"\n    \"time\"\n)\n\nfunc TestBucket_Refill(t *testing.T) {\n    b := NewBucket(Config{Rate:  2, Burst: 4})\n    b.Take(4)\n    b.advance(time.Second)\n    if got := b.Available(); got != 2 {\n        t.Errorf(\"Available() = %d, want 2\", got)\n    }\n}\n\nfunc TestBucket_Burst(t *testing.T) {\n    b := NewBucket(Config{Rate:2,Burst:4})\n    if !b.Take(4) { t.Error(\"Take(4) should succeed at burst\") }\n    if b.Take(1) { t.Error(\"Take(1) should fail when empty\") }\n}",
+        "package ratelimit\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestBucket_Refill(t *testing.T) {\n\tb := NewBucket(Config{Rate: 2, Burst: 4})\n\tb.Take(4)\n\tb.advance(time.Second)\n\tif got := b.Available(); got != 2 {\n\t\tt.Errorf(\"Available() = %d, want 2\", got)\n\t}\n}\n\nfunc TestBucket_Burst(t *testing.T) {\n\tb := NewBucket(Config{Rate: 2, Burst: 4})\n\tif !b.Take(4) {\n\t\tt.Error(\"Take(4) should succeed at burst\")\n\t}\n\tif b.Take(1) {\n\t\tt.Error(\"Take(1) should fail when empty\")\n\t}\n}"
+      ]
+    },
+    "note": "gofmt pass only: spaces to tabs, composite-literal spacing, one-line ifs expanded; no token of test logic changed"
+  },
+  {
+    "id": "go-parallel-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/hash/hash_test.go": [
+        "package hash\n\nimport \"testing\"\n\nfunc TestSum_Deterministic(t *testing.T) {\n\ta := Sum([]byte(\"payload\"))\n\tb := Sum([]byte(\"payload\"))\n\tif a != b {\n\t\tt.Errorf(\"Sum not deterministic: %x != %x\", a, b)\n\t}\n}\n\nfunc TestSum_DistinctInputs(t *testing.T) {\n\tif Sum([]byte(\"a\")) == Sum([]byte(\"b\")) {\n\t\tt.Error(\"Sum(a) == Sum(b)\")\n\t}\n}",
+        "package hash\n\nimport \"testing\"\n\nfunc TestSum_Deterministic(t *testing.T) {\n\tt.Parallel()\n\ta := Sum([]byte(\"payload\"))\n\tb := Sum([]byte(\"payload\"))\n\tif a != b {\n\t\tt.Errorf(\"Sum not deterministic: %x != %x\", a, b)\n\t}\n}\n\nfunc TestSum_DistinctInputs(t *testing.T) {\n\tt.Parallel()\n\tif Sum([]byte(\"a\")) == Sum([]byte(\"b\")) {\n\t\tt.Error(\"Sum(a) == Sum(b)\")\n\t}\n}"
+      ]
+    },
+    "note": "t.Parallel() added to two independent pure-function tests; they still run and still assert"
+  },
+  {
+    "id": "go-helper-extracted-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/fixture/header_test.go": [
+        "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestHeader_Magic(t *testing.T) {\n\tf, err := os.Open(\"testdata/ok.bin\")\n\tif err != nil {\n\t\tt.Fatalf(\"open: %v\", err)\n\t}\n\tdefer f.Close()\n\th, _ := ReadHeader(f)\n\tif h.Magic != 0xCAFE {\n\t\tt.Errorf(\"Magic = %#x, want 0xCAFE\", h.Magic)\n\t}\n}\n\nfunc TestHeader_Version(t *testing.T) {\n\tf, err := os.Open(\"testdata/ok.bin\")\n\tif err != nil {\n\t\tt.Fatalf(\"open: %v\", err)\n\t}\n\tdefer f.Close()\n\th, _ := ReadHeader(f)\n\tif h.Version != 2 {\n\t\tt.Errorf(\"Version = %d, want 2\", h.Version)\n\t}\n}\n\nfunc TestHeader_Truncated(t *testing.T) {\n\tf, err := os.Open(\"testdata/short.bin\")\n\tif err != nil {\n\t\tt.Fatalf(\"open: %v\", err)\n\t}\n\tdefer f.Close()\n\tif _, err := ReadHeader(f); err == nil {\n\t\tt.Error(\"expected error for truncated header\")\n\t}\n}",
+        "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc mustOpen(t *testing.T, path string) *os.File {\n\tt.Helper()\n\tf, err := os.Open(path)\n\tif err != nil {\n\t\tt.Fatalf(\"open %s: %v\", path, err)\n\t}\n\tt.Cleanup(func() { f.Close() })\n\treturn f\n}\n\nfunc TestHeader_Magic(t *testing.T) {\n\tf := mustOpen(t, \"testdata/ok.bin\")\n\th, _ := ReadHeader(f)\n\tif h.Magic != 0xCAFE {\n\t\tt.Errorf(\"Magic = %#x, want 0xCAFE\", h.Magic)\n\t}\n}\n\nfunc TestHeader_Version(t *testing.T) {\n\tf := mustOpen(t, \"testdata/ok.bin\")\n\th, _ := ReadHeader(f)\n\tif h.Version != 2 {\n\t\tt.Errorf(\"Version = %d, want 2\", h.Version)\n\t}\n}\n\nfunc TestHeader_Truncated(t *testing.T) {\n\tf := mustOpen(t, \"testdata/short.bin\")\n\tif _, err := ReadHeader(f); err == nil {\n\t\tt.Error(\"expected error for truncated header\")\n\t}\n}"
+      ]
+    },
+    "note": "the repeated open-or-Fatalf prologue extracted into mustOpen with t.Helper() and t.Cleanup; the Fatalf still fires on every call site"
+  },
+  {
+    "id": "go-subtest-added-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/router/router_test.go": [
+        "package router\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestRouter_Match(t *testing.T) {\n\tr := New()\n\tr.Handle(\"/users/:id\", named(\"user\"))\n\tr.Handle(\"/health\", named(\"health\"))\n\n\tt.Run(\"static\", func(t *testing.T) {\n\t\th, params := r.Match(\"/health\")\n\t\tassert.Equal(t, \"health\", h.name)\n\t\tassert.Empty(t, params)\n\t})\n\tt.Run(\"param\", func(t *testing.T) {\n\t\th, params := r.Match(\"/users/42\")\n\t\tassert.Equal(t, \"user\", h.name)\n\t\tassert.Equal(t, \"42\", params[\"id\"])\n\t})\n}",
+        "package router\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestRouter_Match(t *testing.T) {\n\tr := New()\n\tr.Handle(\"/users/:id\", named(\"user\"))\n\tr.Handle(\"/health\", named(\"health\"))\n\n\tt.Run(\"static\", func(t *testing.T) {\n\t\th, params := r.Match(\"/health\")\n\t\tassert.Equal(t, \"health\", h.name)\n\t\tassert.Empty(t, params)\n\t})\n\tt.Run(\"param\", func(t *testing.T) {\n\t\th, params := r.Match(\"/users/42\")\n\t\tassert.Equal(t, \"user\", h.name)\n\t\tassert.Equal(t, \"42\", params[\"id\"])\n\t})\n\tt.Run(\"no match\", func(t *testing.T) {\n\t\th, params := r.Match(\"/nope\")\n\t\tassert.Nil(t, h)\n\t\tassert.Nil(t, params)\n\t})\n}"
+      ]
+    },
+    "note": "a new \"no match\" subtest added alongside the existing two; existing subtests untouched"
+  },
+  {
+    "id": "go-rename-keep-prefix-1",
+    "kind": "legit",
+    "language": "go",
+    "files": {
+      "pkg/wire/header_test.go": [
+        "package wire\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestParse(t *testing.T) {\n\th, err := ParseHeader([]byte{0x01, 0x00, 0x10})\n\trequire.NoError(t, err)\n\trequire.Equal(t, uint8(1), h.Version)\n\trequire.Equal(t, uint16(16), h.Length)\n}\n\nfunc TestParseErr(t *testing.T) {\n\t_, err := ParseHeader([]byte{0x01})\n\trequire.ErrorIs(t, err, ErrShortHeader)\n}",
+        "package wire\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestParseHeader(t *testing.T) {\n\th, err := ParseHeader([]byte{0x01, 0x00, 0x10})\n\trequire.NoError(t, err)\n\trequire.Equal(t, uint8(1), h.Version)\n\trequire.Equal(t, uint16(16), h.Length)\n}\n\nfunc TestParseHeader_ShortInput(t *testing.T) {\n\t_, err := ParseHeader([]byte{0x01})\n\trequire.ErrorIs(t, err, ErrShortHeader)\n}"
+      ]
+    },
+    "note": "tests renamed to match the function under test (Test prefix kept, so go test still collects them); bodies unchanged"
+  }
+]

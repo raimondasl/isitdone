@@ -1,0 +1,476 @@
+[
+  {
+    "id": "js-describe-only-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/cart/__tests__/cart.spec.ts": [
+        "import { describe, it, expect } from 'vitest'\nimport { Cart } from '../cart'\n\ndescribe('Cart', () => {\n  describe('add', () => {\n    it('adds an item', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', price: 5 })\n      expect(cart.items).toHaveLength(1)\n    })\n  })\n\n  describe('total', () => {\n    it('sums prices', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', price: 5 })\n      cart.add({ sku: 'B2', price: 7 })\n      expect(cart.total()).toBe(12)\n    })\n\n    it('applies a percentage discount', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', price: 100 })\n      cart.applyDiscount(10)\n      expect(cart.total()).toBe(90)\n    })\n  })\n})",
+        "import { describe, it, expect } from 'vitest'\nimport { Cart } from '../cart'\n\ndescribe('Cart', () => {\n  describe.only('add', () => {\n    it('adds an item', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', price: 5 })\n      expect(cart.items).toHaveLength(1)\n    })\n  })\n\n  describe('total', () => {\n    it('sums prices', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', price: 5 })\n      cart.add({ sku: 'B2', price: 7 })\n      expect(cart.total()).toBe(12)\n    })\n\n    it('applies a percentage discount', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', price: 100 })\n      cart.applyDiscount(10)\n      expect(cart.total()).toBe(90)\n    })\n  })\n})"
+      ]
+    },
+    "note": "describe.only on the inner add suite silently drops both total tests (the discount test is the one that currently fails)",
+    "expect": {
+      "ids": [
+        "only-added"
+      ]
+    }
+  },
+  {
+    "id": "js-xit-xdescribe-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "test/parser.test.js": [
+        "const { expect } = require('chai');\nconst { parseDuration } = require('../lib/parser');\n\ndescribe('parseDuration', function () {\n  it('parses seconds', function () {\n    expect(parseDuration('30s')).to.equal(30000);\n  });\n\n  it('parses minutes', function () {\n    expect(parseDuration('2m')).to.equal(120000);\n  });\n\n  describe('invalid input', function () {\n    it('rejects an empty string', function () {\n      expect(() => parseDuration('')).to.throw('empty duration');\n    });\n\n    it('rejects unknown units', function () {\n      expect(() => parseDuration('5y')).to.throw('unknown unit');\n    });\n  });\n});",
+        "const { expect } = require('chai');\nconst { parseDuration } = require('../lib/parser');\n\ndescribe('parseDuration', function () {\n  it('parses seconds', function () {\n    expect(parseDuration('30s')).to.equal(30000);\n  });\n\n  xit('parses minutes', function () {\n    expect(parseDuration('2m')).to.equal(120000);\n  });\n\n  xdescribe('invalid input', function () {\n    it('rejects an empty string', function () {\n      expect(() => parseDuration('')).to.throw('empty duration');\n    });\n\n    it('rejects unknown units', function () {\n      expect(() => parseDuration('5y')).to.throw('unknown unit');\n    });\n  });\n});"
+      ]
+    },
+    "note": "one test becomes xit and a whole describe becomes xdescribe; three of four tests stop running with no explanation",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "js-todo-replaces-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/auth/session.test.js": [
+        "const { createSession, refreshSession } = require('./session');\n\ndescribe('sessions', () => {\n  test('creates a session with a 1h expiry', () => {\n    const s = createSession('user-1', { now: 0 });\n    expect(s.expiresAt).toBe(3600_000);\n  });\n\n  test('refresh extends the expiry from now', () => {\n    const s = createSession('user-1', { now: 0 });\n    const r = refreshSession(s, { now: 1800_000 });\n    expect(r.expiresAt).toBe(5400_000);\n  });\n\n  test('refresh of an expired session throws', () => {\n    const s = createSession('user-1', { now: 0 });\n    expect(() => refreshSession(s, { now: 4000_000 })).toThrow('session expired');\n  });\n});",
+        "const { createSession, refreshSession } = require('./session');\n\ndescribe('sessions', () => {\n  test('creates a session with a 1h expiry', () => {\n    const s = createSession('user-1', { now: 0 });\n    expect(s.expiresAt).toBe(3600_000);\n  });\n\n  test('refresh extends the expiry from now', () => {\n    const s = createSession('user-1', { now: 0 });\n    const r = refreshSession(s, { now: 1800_000 });\n    expect(r.expiresAt).toBe(5400_000);\n  });\n\n  test.todo('refresh of an expired session throws');\n});"
+      ]
+    },
+    "note": "a previously implemented test is hollowed out into a test.todo placeholder with the same title, so the suite reports it as pending instead of failing",
+    "expect": {
+      "ids": [
+        "skip-added",
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "js-test-deleted-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/slugify.test.ts": [
+        "import { describe, expect, it } from \"vitest\";\nimport { slugify } from \"../src/slugify\";\n\ndescribe(\"slugify\", () => {\n  it(\"lowercases and hyphenates\", () => {\n    expect(slugify(\"Hello World\")).toBe(\"hello-world\");\n  });\n\n  it(\"collapses repeated separators\", () => {\n    expect(slugify(\"a  --  b\")).toBe(\"a-b\");\n  });\n\n  it(\"strips diacritics\", () => {\n    expect(slugify(\"Crème Brûlée\")).toBe(\"creme-brulee\");\n  });\n\n  it(\"trims leading and trailing hyphens\", () => {\n    expect(slugify(\"--tidy--\")).toBe(\"tidy\");\n  });\n});",
+        "import { describe, expect, it } from \"vitest\";\nimport { slugify } from \"../src/slugify\";\n\ndescribe(\"slugify\", () => {\n  it(\"lowercases and hyphenates\", () => {\n    expect(slugify(\"Hello World\")).toBe(\"hello-world\");\n  });\n\n  it(\"collapses repeated separators\", () => {\n    expect(slugify(\"a  --  b\")).toBe(\"a-b\");\n  });\n\n  it(\"trims leading and trailing hyphens\", () => {\n    expect(slugify(\"--tidy--\")).toBe(\"tidy\");\n  });\n});"
+      ]
+    },
+    "note": "the diacritics test is deleted with nothing replacing it and no change to the implementation",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "js-body-commented-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "__tests__/rateLimiter.test.js": [
+        "const { RateLimiter } = require('../src/rateLimiter');\n\ndescribe('RateLimiter', () => {\n  let clock;\n  beforeEach(() => { clock = { now: 0 }; });\n\n  it('allows up to the limit within the window', () => {\n    const rl = new RateLimiter({ limit: 3, windowMs: 1000, clock });\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(false);\n  });\n\n  it('resets after the window elapses', () => {\n    const rl = new RateLimiter({ limit: 1, windowMs: 1000, clock });\n    expect(rl.tryAcquire('k')).toBe(true);\n    clock.now = 1001;\n    expect(rl.tryAcquire('k')).toBe(true);\n  });\n});",
+        "const { RateLimiter } = require('../src/rateLimiter');\n\ndescribe('RateLimiter', () => {\n  let clock;\n  beforeEach(() => { clock = { now: 0 }; });\n\n  it('allows up to the limit within the window', () => {\n    const rl = new RateLimiter({ limit: 3, windowMs: 1000, clock });\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(false);\n  });\n\n  it('resets after the window elapses', () => {\n    // const rl = new RateLimiter({ limit: 1, windowMs: 1000, clock });\n    // expect(rl.tryAcquire('k')).toBe(true);\n    // clock.now = 1001;\n    // expect(rl.tryAcquire('k')).toBe(true);\n  });\n});"
+      ]
+    },
+    "note": "the window-reset test keeps its name but its whole body is commented out, so it passes as an empty test",
+    "expect": {
+      "ids": [
+        "assertions-removed"
+      ]
+    }
+  },
+  {
+    "id": "js-tautology-one-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/utils/__tests__/hash.test.ts": [
+        "import { expect, test } from 'vitest'\nimport { fnv1a } from '../hash'\n\ntest('fnv1a is deterministic', () => {\n  expect(fnv1a('hello')).toBe(fnv1a('hello'))\n})\n\ntest('fnv1a matches the reference vectors', () => {\n  expect(fnv1a('')).toBe(0x811c9dc5)\n  expect(fnv1a('a')).toBe(0xe40c292c)\n})",
+        "import { expect, test } from 'vitest'\nimport { fnv1a } from '../hash'\n\ntest('fnv1a is deterministic', () => {\n  expect(fnv1a('hello')).toBe(fnv1a('hello'))\n})\n\ntest('fnv1a matches the reference vectors', () => {\n  // reference vectors differ between 32-bit and BigInt builds\n  expect(1).toBe(1)\n})"
+      ]
+    },
+    "note": "the reference-vector checks are replaced by expect(1).toBe(1) so the hash can return anything and the test stays green",
+    "expect": {
+      "ids": [
+        "tautology-added",
+        "assertions-removed"
+      ]
+    }
+  },
+  {
+    "id": "js-early-return-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "test/queue.test.js": [
+        "const { Queue } = require('../src/queue');\n\ndescribe('Queue', () => {\n  it('processes jobs in FIFO order', async () => {\n    const seen = [];\n    const q = new Queue({ concurrency: 1 });\n    q.push(async () => seen.push('a'));\n    q.push(async () => seen.push('b'));\n    await q.drain();\n    expect(seen).toEqual(['a', 'b']);\n  });\n\n  it('retries a failed job up to maxRetries', async () => {\n    let attempts = 0;\n    const q = new Queue({ concurrency: 1, maxRetries: 2 });\n    q.push(async () => {\n      attempts += 1;\n      if (attempts < 3) throw new Error('flaky');\n    });\n    await q.drain();\n    expect(attempts).toBe(3);\n    expect(q.failed).toHaveLength(0);\n  });\n});",
+        "const { Queue } = require('../src/queue');\n\ndescribe('Queue', () => {\n  it('processes jobs in FIFO order', async () => {\n    const seen = [];\n    const q = new Queue({ concurrency: 1 });\n    q.push(async () => seen.push('a'));\n    q.push(async () => seen.push('b'));\n    await q.drain();\n    expect(seen).toEqual(['a', 'b']);\n  });\n\n  it('retries a failed job up to maxRetries', async () => {\n    let attempts = 0;\n    const q = new Queue({ concurrency: 1, maxRetries: 2 });\n    q.push(async () => {\n      attempts += 1;\n      if (attempts < 3) throw new Error('flaky');\n    });\n    return; // TODO: drain() hangs under fake timers, re-enable after #212\n    await q.drain();\n    expect(attempts).toBe(3);\n    expect(q.failed).toHaveLength(0);\n  });\n});"
+      ]
+    },
+    "note": "a bare return is inserted before the drain and its two assertions, so the retry test always passes without exercising anything",
+    "expect": {
+      "ids": [
+        "early-return-added"
+      ]
+    }
+  },
+  {
+    "id": "js-catch-swallow-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/api/__tests__/client.spec.ts": [
+        "import { describe, it, expect, vi } from 'vitest'\nimport { ApiClient } from '../client'\n\ndescribe('ApiClient', () => {\n  it('returns parsed JSON for a 200', async () => {\n    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 7 }) })\n    const client = new ApiClient({ fetcher })\n    await expect(client.get('/users/7')).resolves.toEqual({ id: 7 })\n  })\n\n  it('throws an HttpError for a 404', async () => {\n    const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) })\n    const client = new ApiClient({ fetcher })\n    await expect(client.get('/users/404')).rejects.toThrow('404 Not Found')\n  })\n})",
+        "import { describe, it, expect, vi } from 'vitest'\nimport { ApiClient } from '../client'\n\ndescribe('ApiClient', () => {\n  it('returns parsed JSON for a 200', async () => {\n    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 7 }) })\n    const client = new ApiClient({ fetcher })\n    await expect(client.get('/users/7')).resolves.toEqual({ id: 7 })\n  })\n\n  it('throws an HttpError for a 404', async () => {\n    const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) })\n    const client = new ApiClient({ fetcher })\n    try {\n      await expect(client.get('/users/404')).rejects.toThrow('404 Not Found')\n    } catch (err) {}\n  })\n})"
+      ]
+    },
+    "note": "the rejects.toThrow assertion is wrapped in a try/catch with an empty catch, so a failing assertion is swallowed and the test passes",
+    "expect": {
+      "ids": [
+        "error-swallowed"
+      ]
+    }
+  },
+  {
+    "id": "js-matchers-loosened-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/notifications/mailer.test.ts": [
+        "import { Mailer } from './mailer';\nimport { renderTemplate } from './templates';\n\njest.mock('./templates');\n\ndescribe('Mailer', () => {\n  const transport = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };\n  const mailer = new Mailer(transport);\n\n  beforeEach(() => jest.clearAllMocks());\n\n  it('sends a welcome email through the transport', async () => {\n    (renderTemplate as jest.Mock).mockReturnValue('<p>hi</p>');\n    await mailer.sendWelcome({ email: 'ann@example.com', name: 'Ann' });\n    expect(transport.send).toHaveBeenCalledWith({\n      to: 'ann@example.com',\n      subject: 'Welcome, Ann',\n      html: '<p>hi</p>',\n    });\n  });\n\n  it('returns the transport result unchanged', async () => {\n    const result = await mailer.sendWelcome({ email: 'bo@example.com', name: 'Bo' });\n    expect(result).toStrictEqual({ id: 'msg-1' });\n  });\n\n  it('rejects an invalid address', async () => {\n    await expect(mailer.sendWelcome({ email: 'nope', name: 'X' })).rejects.toThrow('invalid email address');\n  });\n});",
+        "import { Mailer } from './mailer';\nimport { renderTemplate } from './templates';\n\njest.mock('./templates');\n\ndescribe('Mailer', () => {\n  const transport = { send: jest.fn().mockResolvedValue({ id: 'msg-1' }) };\n  const mailer = new Mailer(transport);\n\n  beforeEach(() => jest.clearAllMocks());\n\n  it('sends a welcome email through the transport', async () => {\n    (renderTemplate as jest.Mock).mockReturnValue('<p>hi</p>');\n    await mailer.sendWelcome({ email: 'ann@example.com', name: 'Ann' });\n    expect(transport.send).toHaveBeenCalled();\n  });\n\n  it('returns the transport result unchanged', async () => {\n    const result = await mailer.sendWelcome({ email: 'bo@example.com', name: 'Bo' });\n    expect(result).toEqual({ id: 'msg-1' });\n  });\n\n  it('rejects an invalid address', async () => {\n    await expect(mailer.sendWelcome({ email: 'nope', name: 'X' })).rejects.toThrow();\n  });\n});"
+      ]
+    },
+    "note": "toHaveBeenCalledWith loses its payload, toStrictEqual becomes toEqual and toThrow loses its message; each test now accepts wrong subjects, extra fields or a different error",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "js-existence-checks-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/report.test.ts": [
+        "import { describe, expect, it } from 'vitest'\nimport { buildReport } from '../src/report'\nimport { fixtures } from './fixtures/orders'\n\ndescribe('buildReport', () => {\n  it('computes the grand total', () => {\n    const report = buildReport(fixtures.march)\n    expect(report.grandTotal).toBe(1834.5)\n  })\n\n  it('groups line items by region', () => {\n    const report = buildReport(fixtures.march)\n    expect(report.regions).toHaveLength(3)\n  })\n\n  it('renders the same markdown as last release', () => {\n    const report = buildReport(fixtures.march)\n    expect(report.toMarkdown()).toMatchSnapshot()\n  })\n})",
+        "import { describe, expect, it } from 'vitest'\nimport { buildReport } from '../src/report'\nimport { fixtures } from './fixtures/orders'\n\ndescribe('buildReport', () => {\n  it('computes the grand total', () => {\n    const report = buildReport(fixtures.march)\n    expect(report.grandTotal).toBeDefined()\n  })\n\n  it('groups line items by region', () => {\n    const report = buildReport(fixtures.march)\n    expect(report.regions).toBeTruthy()\n  })\n\n  it('renders the same markdown as last release', () => {\n    const report = buildReport(fixtures.march)\n    expect(report.toMarkdown()).toBeDefined()\n  })\n})"
+      ]
+    },
+    "note": "toBe(1834.5), toHaveLength(3) and toMatchSnapshot() all become existence checks; any non-null output now passes",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "js-closeto-precision-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/geo/__tests__/haversine.test.js": [
+        "const { haversineKm } = require('../haversine');\n\nconst LONDON = { lat: 51.5074, lon: -0.1278 };\nconst PARIS = { lat: 48.8566, lon: 2.3522 };\n\ndescribe('haversineKm', () => {\n  it('is zero for the same point', () => {\n    expect(haversineKm(LONDON, LONDON)).toBe(0);\n  });\n\n  it('matches the published London-Paris distance', () => {\n    expect(haversineKm(LONDON, PARIS)).toBeCloseTo(343.5565, 4);\n  });\n\n  it('is symmetric', () => {\n    expect(haversineKm(PARIS, LONDON)).toBeCloseTo(haversineKm(LONDON, PARIS), 10);\n  });\n});",
+        "const { haversineKm } = require('../haversine');\n\nconst LONDON = { lat: 51.5074, lon: -0.1278 };\nconst PARIS = { lat: 48.8566, lon: 2.3522 };\n\ndescribe('haversineKm', () => {\n  it('is zero for the same point', () => {\n    expect(haversineKm(LONDON, LONDON)).toBe(0);\n  });\n\n  it('matches the published London-Paris distance', () => {\n    expect(haversineKm(LONDON, PARIS)).toBeCloseTo(343.5565, 1);\n  });\n\n  it('is symmetric', () => {\n    expect(haversineKm(PARIS, LONDON)).toBeCloseTo(haversineKm(LONDON, PARIS), 10);\n  });\n});"
+      ]
+    },
+    "note": "precision drops from 4 digits to 1, hiding a 40 m error in a distance that is specified to the metre",
+    "expect": {
+      "ids": [
+        "tolerance-widened"
+      ]
+    }
+  },
+  {
+    "id": "js-assertions-gutted-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "test/csv.test.js": [
+        "const assert = require('node:assert/strict');\nconst { parseCsv } = require('../lib/csv');\n\ndescribe('parseCsv', () => {\n  it('splits simple rows', () => {\n    const rows = parseCsv('a,b\\n1,2\\n');\n    assert.deepEqual(rows, [['a', 'b'], ['1', '2']]);\n  });\n\n  it('honours quoted fields with embedded commas', () => {\n    const rows = parseCsv('name,city\\n\"Doe, Jane\",Oslo\\n');\n    assert.equal(rows.length, 2);\n    assert.deepEqual(rows[1], ['Doe, Jane', 'Oslo']);\n  });\n\n  it('unescapes doubled quotes', () => {\n    const rows = parseCsv('q\\n\"say \"\"hi\"\"\"\\n');\n    assert.equal(rows[1][0], 'say \"hi\"');\n  });\n});",
+        "const assert = require('node:assert/strict');\nconst { parseCsv } = require('../lib/csv');\n\ndescribe('parseCsv', () => {\n  it('splits simple rows', () => {\n    const rows = parseCsv('a,b\\n1,2\\n');\n    assert.deepEqual(rows, [['a', 'b'], ['1', '2']]);\n  });\n\n  it('honours quoted fields with embedded commas', () => {\n    const rows = parseCsv('name,city\\n\"Doe, Jane\",Oslo\\n');\n  });\n\n  it('unescapes doubled quotes', () => {\n    const rows = parseCsv('q\\n\"say \"\"hi\"\"\"\\n');\n    assert.equal(rows[1][0], 'say \"hi\"');\n  });\n});"
+      ]
+    },
+    "note": "the quoted-field test still calls parseCsv but both asserts are gone, so it only checks that the parser does not throw",
+    "expect": {
+      "ids": [
+        "assertions-removed"
+      ]
+    }
+  },
+  {
+    "id": "js-each-row-deleted-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/pricing/__tests__/discount.test.ts": [
+        "import { discountFor } from '../discount';\n\ndescribe('discountFor', () => {\n  it.each`\n    tier        | spend  | expected\n    ${'basic'}  | ${50}  | ${0}\n    ${'basic'}  | ${500} | ${0.05}\n    ${'gold'}   | ${50}  | ${0.1}\n    ${'gold'}   | ${500} | ${0.2}\n  `('gives $expected for $tier spending $spend', ({ tier, spend, expected }) => {\n    expect(discountFor(tier, spend)).toBe(expected);\n  });\n});",
+        "import { discountFor } from '../discount';\n\ndescribe('discountFor', () => {\n  it.each`\n    tier        | spend  | expected\n    ${'basic'}  | ${50}  | ${0}\n    ${'basic'}  | ${500} | ${0.05}\n    ${'gold'}   | ${50}  | ${0.1}\n  `('gives $expected for $tier spending $spend', ({ tier, spend, expected }) => {\n    expect(discountFor(tier, spend)).toBe(expected);\n  });\n});"
+      ]
+    },
+    "note": "the gold/500 row is removed from the table, deleting the one case that covers the high-spend gold tier without touching any it() declaration",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "js-expected-value-bent-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/money/round.ts": [
+        "export function roundHalfEven(x: number): number {\n  const floor = Math.floor(x);\n  const diff = x - floor;\n  if (diff > 0.5) return floor + 1;\n  if (diff < 0.5) return floor;\n  return floor % 2 === 0 ? floor : floor + 1;\n}",
+        "export function roundHalfEven(x: number): number {\n  return Math.round(x);\n}"
+      ],
+      "src/money/round.test.ts": [
+        "import { roundHalfEven } from './round';\n\ndescribe('roundHalfEven', () => {\n  it(\"rounds half to even (banker's rounding)\", () => {\n    expect(roundHalfEven(2.5)).toBe(2);\n    expect(roundHalfEven(3.5)).toBe(4);\n    expect(roundHalfEven(-2.5)).toBe(-2);\n  });\n\n  it('leaves integers alone', () => {\n    expect(roundHalfEven(7)).toBe(7);\n  });\n});",
+        "import { roundHalfEven } from './round';\n\ndescribe('roundHalfEven', () => {\n  it(\"rounds half to even (banker's rounding)\", () => {\n    expect(roundHalfEven(2.5)).toBe(3);\n    expect(roundHalfEven(3.5)).toBe(4);\n    expect(roundHalfEven(-2.5)).toBe(-2);\n  });\n\n  it('leaves integers alone', () => {\n    expect(roundHalfEven(7)).toBe(7);\n  });\n});"
+      ]
+    },
+    "note": "the implementation regresses to Math.round and the expected value for 2.5 is edited from 2 to 3 to match, while the test title still promises banker's rounding; no detector id covers a bent expectation",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "js-constant-target-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/invoice.test.js": [
+        "const { Invoice } = require('../src/invoice');\n\ndescribe('Invoice totals', () => {\n  const lines = [\n    { description: 'Design', qty: 2, unitPrice: 150 },\n    { description: 'Hosting', qty: 12, unitPrice: 20 },\n  ];\n\n  test('subtotal is the sum of qty * unitPrice', () => {\n    const invoice = new Invoice(lines);\n    expect(invoice.subtotal()).toBe(540);\n  });\n\n  test('total includes 20% VAT', () => {\n    const invoice = new Invoice(lines, { vatRate: 0.2 });\n    expect(invoice.total()).toBe(648);\n  });\n});",
+        "const { Invoice } = require('../src/invoice');\n\ndescribe('Invoice totals', () => {\n  const lines = [\n    { description: 'Design', qty: 2, unitPrice: 150 },\n    { description: 'Hosting', qty: 12, unitPrice: 20 },\n  ];\n\n  test('subtotal is the sum of qty * unitPrice', () => {\n    const invoice = new Invoice(lines);\n    expect(invoice.subtotal()).toBe(540);\n  });\n\n  test('total includes 20% VAT', () => {\n    const invoice = new Invoice(lines, { vatRate: 0.2 });\n    const total = 648; // invoice.total() is off by rounding, see #1422\n    expect(total).toBe(648);\n  });\n});"
+      ]
+    },
+    "note": "the VAT test now asserts on a hard-coded local constant instead of invoice.total(), which is a tautology hidden behind a variable name",
+    "expect": {
+      "ids": [
+        "tautology-added"
+      ]
+    }
+  },
+  {
+    "id": "js-expect-assertions-zero-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/validate/__tests__/schema.test.js": [
+        "const { validate } = require('../schema');\n\ndescribe('validate', () => {\n  it('rejects a payload with a missing email', () => {\n    expect.assertions(2);\n    return validate({ name: 'Ann' }).catch((err) => {\n      expect(err.code).toBe('E_MISSING_FIELD');\n      expect(err.field).toBe('email');\n    });\n  });\n\n  it('resolves a well-formed payload', async () => {\n    await expect(validate({ name: 'Ann', email: 'ann@example.com' })).resolves.toBe(true);\n  });\n});",
+        "const { validate } = require('../schema');\n\ndescribe('validate', () => {\n  it('rejects a payload with a missing email', () => {\n    expect.assertions(0);\n    return validate({ name: 'Ann' }).catch((err) => {\n      expect(err.code).toBe('E_MISSING_FIELD');\n      expect(err.field).toBe('email');\n    });\n  });\n\n  it('resolves a well-formed payload', async () => {\n    await expect(validate({ name: 'Ann', email: 'ann@example.com' })).resolves.toBe(true);\n  });\n});"
+      ]
+    },
+    "note": "expect.assertions(2) guarded the .catch path; with expect.assertions(0) a validate() that wrongly resolves never reaches the assertions and the test passes",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "js-each-template-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/slugify.test.ts": [
+        "import { slugify } from './slugify';\n\ndescribe('slugify', () => {\n  it('lowercases', () => {\n    expect(slugify('Hello')).toBe('hello');\n  });\n  it('replaces spaces with dashes', () => {\n    expect(slugify('hello world')).toBe('hello-world');\n  });\n  it('strips punctuation', () => {\n    expect(slugify('hi, there!')).toBe('hi-there');\n  });\n});",
+        "import { slugify } from './slugify';\n\ndescribe('slugify', () => {\n  it.each`\n    input           | expected\n    ${'Hello'}       | ${'hello'}\n    ${'hello world'} | ${'hello-world'}\n    ${'hi, there!'}  | ${'hi-there'}\n  `('slugify($input) -> $expected', ({ input, expected }) => {\n    expect(slugify(input)).toBe(expected);\n  });\n});"
+      ]
+    },
+    "note": "three single-assertion tests folded into a three-row tagged-template table with identical inputs and expectations"
+  },
+  {
+    "id": "js-move-existing-dest-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/__tests__/utils.test.js": [
+        "const { parseDate, formatMoney, clamp } = require('../utils');\n\ntest('parseDate reads ISO strings', () => {\n  expect(parseDate('2024-01-05').getFullYear()).toBe(2024);\n});\n\ntest('formatMoney adds a currency symbol', () => {\n  expect(formatMoney(12.5)).toBe('$12.50');\n});\n\ntest('formatMoney rounds to cents', () => {\n  expect(formatMoney(1.005)).toBe('$1.01');\n});\n\ntest('clamp keeps values in range', () => {\n  expect(clamp(15, 0, 10)).toBe(10);\n});",
+        "const { parseDate, clamp } = require('../utils');\n\ntest('parseDate reads ISO strings', () => {\n  expect(parseDate('2024-01-05').getFullYear()).toBe(2024);\n});\n\ntest('clamp keeps values in range', () => {\n  expect(clamp(15, 0, 10)).toBe(10);\n});"
+      ],
+      "src/__tests__/money.test.js": [
+        "const { formatMoney } = require('../utils');\n\ntest('formatMoney handles zero', () => {\n  expect(formatMoney(0)).toBe('$0.00');\n});",
+        "const { formatMoney } = require('../utils');\n\ntest('formatMoney handles zero', () => {\n  expect(formatMoney(0)).toBe('$0.00');\n});\n\ntest('formatMoney adds a currency symbol', () => {\n  expect(formatMoney(12.5)).toBe('$12.50');\n});\n\ntest('formatMoney rounds to cents', () => {\n  expect(formatMoney(1.005)).toBe('$1.01');\n});"
+      ]
+    },
+    "note": "two formatMoney tests moved verbatim from the utils suite into the existing money suite; both halves are in the diff"
+  },
+  {
+    "id": "js-describe-rename-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/cart/cart.spec.ts": [
+        "import { Cart } from './cart'\n\ndescribe('Cart', () => {\n  describe('add', () => {\n    it('adds an item', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', qty: 2 })\n      expect(cart.items).toHaveLength(1)\n    })\n  })\n\n  describe('total', () => {\n    it('sums line totals', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', qty: 2, price: 5 })\n      expect(cart.total()).toBe(10)\n    })\n  })\n})",
+        "import { Cart } from './cart'\n\n// Focus a single case locally with it.only( while debugging; never commit it.\ndescribe('Cart', () => {\n  describe('#add()', () => {\n    it('adds an item', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', qty: 2 })\n      expect(cart.items).toHaveLength(1)\n    })\n  })\n\n  describe('#total()', () => {\n    it('sums line totals', () => {\n      const cart = new Cart()\n      cart.add({ sku: 'A1', qty: 2, price: 5 })\n      expect(cart.total()).toBe(10)\n    })\n  })\n})"
+      ]
+    },
+    "note": "describe titles renamed to the #method() convention and a comment mentioning it.only( added; no test or assertion changed"
+  },
+  {
+    "id": "js-assert-helper-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "tests/users.test.ts": [
+        "import { createUser, findUser, updateUser } from '../src/users';\n\ndescribe('users', () => {\n  it('createUser returns a valid user', async () => {\n    const u = await createUser({ email: 'a@x.io' });\n    expect(u.id).toMatch(/^usr_/);\n    expect(u.email).toBe('a@x.io');\n    expect(u.createdAt).toBeInstanceOf(Date);\n  });\n\n  it('findUser returns the stored user', async () => {\n    const created = await createUser({ email: 'b@x.io' });\n    const u = await findUser(created.id);\n    expect(u.id).toMatch(/^usr_/);\n    expect(u.email).toBe('b@x.io');\n    expect(u.createdAt).toBeInstanceOf(Date);\n  });\n\n  it('updateUser keeps the shape', async () => {\n    const created = await createUser({ email: 'c@x.io' });\n    const u = await updateUser(created.id, { email: 'c2@x.io' });\n    expect(u.id).toMatch(/^usr_/);\n    expect(u.email).toBe('c2@x.io');\n    expect(u.createdAt).toBeInstanceOf(Date);\n  });\n});",
+        "import { createUser, findUser, updateUser } from '../src/users';\n\nfunction expectValidUser(u: { id: string; email: string; createdAt: Date }, email: string) {\n  expect(u.id).toMatch(/^usr_/);\n  expect(u.email).toBe(email);\n  expect(u.createdAt).toBeInstanceOf(Date);\n}\n\ndescribe('users', () => {\n  it('createUser returns a valid user', async () => {\n    const u = await createUser({ email: 'a@x.io' });\n    expectValidUser(u, 'a@x.io');\n  });\n\n  it('findUser returns the stored user', async () => {\n    const created = await createUser({ email: 'b@x.io' });\n    const u = await findUser(created.id);\n    expectValidUser(u, 'b@x.io');\n  });\n\n  it('updateUser keeps the shape', async () => {\n    const created = await createUser({ email: 'c@x.io' });\n    const u = await updateUser(created.id, { email: 'c2@x.io' });\n    expectValidUser(u, 'c2@x.io');\n  });\n});"
+      ]
+    },
+    "note": "three identical assertion triples extracted into expectValidUser(), which is called from all three tests; every check still runs"
+  },
+  {
+    "id": "js-callback-to-async-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "test/fetchProfile.test.js": [
+        "const { fetchProfile } = require('../lib/fetchProfile');\n\ndescribe('fetchProfile', function () {\n  it('resolves the profile for a known id', function (done) {\n    fetchProfile('u-42', function (err, profile) {\n      expect(err).toBeNull();\n      expect(profile.name).toBe('Ada');\n      expect(profile.roles).toContain('admin');\n      done();\n    });\n  });\n\n  it('errors on an unknown id', function (done) {\n    fetchProfile('nope', function (err) {\n      expect(err.code).toBe('NOT_FOUND');\n      done();\n    });\n  });\n});",
+        "const { fetchProfile } = require('../lib/fetchProfile');\n\ndescribe('fetchProfile', function () {\n  it('resolves the profile for a known id', async function () {\n    const profile = await fetchProfile('u-42');\n    expect(profile.name).toBe('Ada');\n    expect(profile.roles).toContain('admin');\n  });\n\n  it('errors on an unknown id', async function () {\n    await expect(fetchProfile('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' });\n  });\n});"
+      ]
+    },
+    "note": "node-style callbacks replaced with await; the expect(err).toBeNull() guard is subsumed by the promise rejecting"
+  },
+  {
+    "id": "js-split-test-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/validate.test.ts": [
+        "import { validateEmail } from './validate';\n\ntest('validateEmail', () => {\n  expect(validateEmail('ada@example.com')).toBe(true);\n  expect(validateEmail('ada@')).toBe(false);\n  expect(validateEmail('')).toBe(false);\n  expect(validateEmail('a b@example.com')).toBe(false);\n});",
+        "import { validateEmail } from './validate';\n\ndescribe('validateEmail', () => {\n  test('accepts a well-formed address', () => {\n    expect(validateEmail('ada@example.com')).toBe(true);\n  });\n\n  test('rejects a missing domain', () => {\n    expect(validateEmail('ada@')).toBe(false);\n  });\n\n  test('rejects an empty string', () => {\n    expect(validateEmail('')).toBe(false);\n  });\n\n  test('rejects whitespace in the local part', () => {\n    expect(validateEmail('a b@example.com')).toBe(false);\n  });\n});"
+      ]
+    },
+    "note": "one four-assertion test split into four named tests, one assertion each"
+  },
+  {
+    "id": "js-prettier-reformat-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/components/SaveButton.test.tsx": [
+        "import { render, screen, fireEvent } from \"@testing-library/react\";\nimport { SaveButton } from \"./SaveButton\";\n\ntest(\"calls onSave with the draft when clicked\", () => {\n  const onSave = jest.fn();\n  render(<SaveButton draft={{ id: 7, title: \"Notes\" }} onSave={onSave} />);\n  fireEvent.click(screen.getByRole(\"button\", { name: \"Save\" }));\n  expect(onSave).toHaveBeenCalledWith({ id: 7, title: \"Notes\" });\n  expect(screen.getByRole(\"button\", { name: \"Save\" })).toBeDisabled();\n});\n\ntest(\"is disabled while saving\", () => {\n  render(<SaveButton draft={{ id: 7, title: \"Notes\" }} onSave={jest.fn()} saving />);\n  expect(screen.getByRole(\"button\", { name: \"Saving…\" })).toBeDisabled();\n});",
+        "import { fireEvent, render, screen } from '@testing-library/react';\nimport { SaveButton } from './SaveButton';\n\ntest('calls onSave with the draft when clicked', () => {\n  const onSave = jest.fn();\n  render(\n    <SaveButton draft={{ id: 7, title: 'Notes' }} onSave={onSave} />,\n  );\n  fireEvent.click(screen.getByRole('button', { name: 'Save' }));\n  expect(onSave).toHaveBeenCalledWith({\n    id: 7,\n    title: 'Notes',\n  });\n  expect(\n    screen.getByRole('button', { name: 'Save' }),\n  ).toBeDisabled();\n});\n\ntest('is disabled while saving', () => {\n  render(\n    <SaveButton\n      draft={{ id: 7, title: 'Notes' }}\n      onSave={jest.fn()}\n      saving\n    />,\n  );\n  expect(\n    screen.getByRole('button', { name: 'Saving…' }),\n  ).toBeDisabled();\n});"
+      ]
+    },
+    "note": "prettier pass: double to single quotes, sorted import, and long expect/render calls wrapped across lines; no semantic change"
+  },
+  {
+    "id": "js-matcher-strengthened-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/notify.test.ts": [
+        "import { notify } from './notify';\nimport { mailer } from './mailer';\n\njest.mock('./mailer');\n\ndescribe('notify', () => {\n  it('sends an email and returns the receipt', async () => {\n    const receipt = await notify('u1', 'Welcome');\n    expect(mailer.send).toHaveBeenCalled();\n    expect(receipt).toEqual({ to: 'u1', subject: 'Welcome', queued: true });\n  });\n\n  it('skips opted-out users', async () => {\n    const receipt = await notify('u-optout', 'Welcome');\n    expect(receipt.queued).toBeFalsy();\n    expect(mailer.send).not.toHaveBeenCalled();\n  });\n});",
+        "import { notify } from './notify';\nimport { mailer } from './mailer';\n\njest.mock('./mailer');\n\ndescribe('notify', () => {\n  it('sends an email and returns the receipt', async () => {\n    const receipt = await notify('u1', 'Welcome');\n    expect(mailer.send).toHaveBeenCalledWith({ to: 'u1', subject: 'Welcome' });\n    expect(mailer.send).toHaveBeenCalledTimes(1);\n    expect(receipt).toStrictEqual({ to: 'u1', subject: 'Welcome', queued: true });\n  });\n\n  it('skips opted-out users', async () => {\n    const receipt = await notify('u-optout', 'Welcome');\n    expect(receipt.queued).toBe(false);\n    expect(mailer.send).not.toHaveBeenCalled();\n  });\n});"
+      ]
+    },
+    "note": "matchers tightened: toHaveBeenCalled -> toHaveBeenCalledWith + toHaveBeenCalledTimes, toEqual -> toStrictEqual, toBeFalsy -> toBe(false)"
+  },
+  {
+    "id": "js-snapshot-to-explicit-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/api/__tests__/serializeOrder.test.js": [
+        "import { serializeOrder } from '../serializeOrder'\n\nconst order = { id: 'ord_9', items: [{ sku: 'A', qty: 2 }], total: 1999, status: 'paid' }\n\ndescribe('serializeOrder', () => {\n  it('matches the wire format', () => {\n    const result = serializeOrder(order)\n    expect(result).toMatchSnapshot()\n  })\n})",
+        "import { serializeOrder } from '../serializeOrder'\n\nconst order = { id: 'ord_9', items: [{ sku: 'A', qty: 2 }], total: 1999, status: 'paid' }\n\ndescribe('serializeOrder', () => {\n  it('matches the wire format', () => {\n    const result = serializeOrder(order)\n    expect(result).toBeDefined()\n    expect(result.id).toBe('ord_9')\n    expect(result.items).toStrictEqual([{ sku: 'A', quantity: 2 }])\n    expect(result.total).toBe('19.99')\n    expect(result.currency).toBe('USD')\n    expect(result.status).toBe('paid')\n    expect(Object.keys(result).sort()).toEqual(['currency', 'id', 'items', 'status', 'total'])\n  })\n})"
+      ]
+    },
+    "note": "the opaque snapshot is replaced by explicit assertions on every field plus a key-set check; strictly more informative"
+  },
+  {
+    "id": "js-todo-with-real-test-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/rateLimit.test.ts": [
+        "import { RateLimiter } from './rateLimit';\n\ndescribe('RateLimiter', () => {\n  it('allows requests under the limit', () => {\n    const rl = new RateLimiter({ limit: 3, windowMs: 1000 });\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n  });\n});",
+        "import { RateLimiter } from './rateLimit';\n\ndescribe('RateLimiter', () => {\n  it('allows requests under the limit', () => {\n    const rl = new RateLimiter({ limit: 3, windowMs: 1000 });\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(true);\n  });\n\n  it('rejects the request that exceeds the limit', () => {\n    const rl = new RateLimiter({ limit: 1, windowMs: 1000 });\n    expect(rl.tryAcquire('k')).toBe(true);\n    expect(rl.tryAcquire('k')).toBe(false);\n  });\n\n  it.todo('resets the counter after the window elapses');\n});"
+      ]
+    },
+    "note": "a new real test is added alongside a todo placeholder for follow-up work; nothing existing was touched"
+  },
+  {
+    "id": "js-for-of-table-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/parseDuration.test.ts": [
+        "import { parseDuration } from './parseDuration';\n\ntest('parses common units', () => {\n  expect(parseDuration('1s')).toBe(1000);\n  expect(parseDuration('2m')).toBe(120000);\n  expect(parseDuration('3h')).toBe(10800000);\n  expect(parseDuration('1d')).toBe(86400000);\n});",
+        "import { parseDuration } from './parseDuration';\n\ntest('parses common units', () => {\n  const cases: Array<[string, number]> = [\n    ['1s', 1000],\n    ['2m', 120000],\n    ['3h', 10800000],\n    ['1d', 86400000],\n  ];\n  for (const [input, expected] of cases) {\n    expect(parseDuration(input)).toBe(expected);\n  }\n});"
+      ]
+    },
+    "note": "four inline assertions rewritten as a for-of loop over a table with the same four rows"
+  },
+  {
+    "id": "js-skip-moved-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/sync.test.js": [
+        "const { syncFolder } = require('./sync');\n\ndescribe('syncFolder', () => {\n  it.skip('retries on ETIMEDOUT (flaky, see #218)', async () => {\n    await expect(syncFolder('/tmp/a', { retries: 2 })).resolves.toBe(true);\n  });\n\n  it('copies new files', async () => {\n    const result = await syncFolder('/tmp/a');\n    expect(result.copied).toBe(3);\n  });\n\n  it('skips unchanged files', async () => {\n    const result = await syncFolder('/tmp/a');\n    expect(result.skipped).toBe(1);\n  });\n});",
+        "const { syncFolder } = require('./sync');\n\ndescribe('syncFolder', () => {\n  it('copies new files', async () => {\n    const result = await syncFolder('/tmp/a');\n    expect(result.copied).toBe(3);\n  });\n\n  it('skips unchanged files', async () => {\n    const result = await syncFolder('/tmp/a');\n    expect(result.skipped).toBe(1);\n  });\n\n  it.skip('retries on ETIMEDOUT (flaky, see #218)', async () => {\n    await expect(syncFolder('/tmp/a', { retries: 2 })).resolves.toBe(true);\n  });\n});"
+      ]
+    },
+    "note": "the pre-existing it.skip is moved to the bottom of the file unchanged; the skipped count is the same before and after"
+  },
+  {
+    "id": "js-try-finally-cleanup-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "test/config.test.ts": [
+        "import { loadConfig } from '../src/config';\n\nit('reads the port from the environment', () => {\n  process.env.PORT = '8081';\n  const cfg = loadConfig();\n  expect(cfg.port).toBe(8081);\n  delete process.env.PORT;\n});",
+        "import { loadConfig } from '../src/config';\n\nit('reads the port from the environment', () => {\n  const previous = process.env.PORT;\n  process.env.PORT = '8081';\n  try {\n    const cfg = loadConfig();\n    expect(cfg.port).toBe(8081);\n  } finally {\n    if (previous === undefined) delete process.env.PORT;\n    else process.env.PORT = previous;\n  }\n});"
+      ]
+    },
+    "note": "environment restore moved into a finally block so a failing assertion no longer leaks PORT into later tests"
+  },
+  {
+    "id": "js-describe-each-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/storage/storage.test.ts": [
+        "import { MemoryStore } from './memory';\nimport { FileStore } from './file';\n\ndescribe('MemoryStore', () => {\n  it('round-trips a value', async () => {\n    const store = new MemoryStore();\n    await store.set('k', 'v');\n    expect(await store.get('k')).toBe('v');\n  });\n  it('returns undefined for a missing key', async () => {\n    const store = new MemoryStore();\n    expect(await store.get('missing')).toBeUndefined();\n  });\n});\n\ndescribe('FileStore', () => {\n  it('round-trips a value', async () => {\n    const store = new FileStore('/tmp/store-test');\n    await store.set('k', 'v');\n    expect(await store.get('k')).toBe('v');\n  });\n  it('returns undefined for a missing key', async () => {\n    const store = new FileStore('/tmp/store-test');\n    expect(await store.get('missing')).toBeUndefined();\n  });\n});",
+        "import { MemoryStore } from './memory';\nimport { FileStore } from './file';\n\ndescribe.each([\n  ['MemoryStore', () => new MemoryStore()],\n  ['FileStore', () => new FileStore('/tmp/store-test')],\n])('%s', (_name, make) => {\n  it('round-trips a value', async () => {\n    const store = make();\n    await store.set('k', 'v');\n    expect(await store.get('k')).toBe('v');\n  });\n  it('returns undefined for a missing key', async () => {\n    const store = make();\n    expect(await store.get('missing')).toBeUndefined();\n  });\n});"
+      ]
+    },
+    "note": "two duplicated describe blocks collapsed into describe.each over the same two implementations; four tests still run"
+  },
+  {
+    "id": "js-allowed-skip-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/pdf/render.test.ts": [
+        "import { renderPdf } from './render';\n\ndescribe('renderPdf', () => {\n  it('produces a PDF header', async () => {\n    const buf = await renderPdf('<h1>hi</h1>');\n    expect(buf.subarray(0, 4).toString()).toBe('%PDF');\n  });\n});",
+        "import { renderPdf } from './render';\n\ndescribe('renderPdf', () => {\n  it('produces a PDF header', async () => {\n    const buf = await renderPdf('<h1>hi</h1>');\n    expect(buf.subarray(0, 4).toString()).toBe('%PDF');\n  });\n\n  // isitdone: allow needs a headless Chromium binary that is not installed on CI runners yet (INFRA-77)\n  it.skip('embeds the requested font', async () => {\n    const buf = await renderPdf('<p style=\"font-family: Inter\">x</p>');\n    expect(buf.toString('latin1')).toContain('/BaseFont /Inter');\n  });\n});"
+      ]
+    },
+    "note": "a brand-new test is added skipped, with an isitdone: allow comment explaining the missing CI dependency; no existing test changed"
+  },
+  {
+    "id": "js-new-test-file-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/lint/__tests__/noFocusedTests.test.ts": [
+        null,
+        "import { lint } from '../noFocusedTests';\n\n/*\n * The rule reports focused tests such as it.only( and fdescribe( so they\n * cannot be committed by accident.\n */\ndescribe('no-focused-tests rule', () => {\n  it('reports it.only', () => {\n    const src = \"it.only('x', () => {})\";\n    const report = lint(src);\n    expect(report.errors).toHaveLength(1);\n    expect(report.errors[0].message).toMatch(/focused test/);\n  });\n\n  it('reports describe.only and fdescribe', () => {\n    expect(lint(\"describe.only('s', () => {})\").errors).toHaveLength(1);\n    expect(lint(\"fdescribe('s', () => {})\").errors).toHaveLength(1);\n  });\n\n  it('ignores a mention inside a comment', () => {\n    // it.only( in a comment is prose, not a call\n    const report = lint('// it.only(\\'x\\')\\nit(\\'x\\', () => {})');\n    expect(report.errors).toHaveLength(0);\n  });\n\n  it('ignores an unfocused test', () => {\n    expect(lint(\"it('x', () => {})\").errors).toEqual([]);\n  });\n\n  it('reports the line number', () => {\n    const report = lint(\"it('a', () => {});\\nit.only('b', () => {});\");\n    expect(report.errors[0].line).toBe(2);\n  });\n\n  it('can autofix by removing .only', () => {\n    const { output } = lint(\"test.only('t', () => {})\", { fix: true });\n    expect(output).toBe(\"test('t', () => {})\");\n  });\n});"
+      ]
+    },
+    "note": "a new 40-line test file for a lint rule; it.only( appears only inside comments and string literals that are the input of the rule under test"
+  }
+]

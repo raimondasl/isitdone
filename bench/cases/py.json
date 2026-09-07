@@ -1,0 +1,239 @@
+[
+  {
+    "id": "py-skipif-always-true-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_ratelimit.py": [
+        "import time\n\nimport pytest\n\nfrom app.ratelimit import TokenBucket\n\n\ndef test_bucket_starts_full():\n    bucket = TokenBucket(capacity=3, refill_per_sec=1)\n    assert bucket.try_acquire()\n    assert bucket.try_acquire()\n    assert bucket.try_acquire()\n    assert not bucket.try_acquire()\n\n\ndef test_bucket_refills_over_time():\n    bucket = TokenBucket(capacity=1, refill_per_sec=100)\n    assert bucket.try_acquire()\n    time.sleep(0.05)\n    assert bucket.try_acquire()\n",
+        "import sys\nimport time\n\nimport pytest\n\nfrom app.ratelimit import TokenBucket\n\n\ndef test_bucket_starts_full():\n    bucket = TokenBucket(capacity=3, refill_per_sec=1)\n    assert bucket.try_acquire()\n    assert bucket.try_acquire()\n    assert bucket.try_acquire()\n    assert not bucket.try_acquire()\n\n\n@pytest.mark.skipif(sys.version_info >= (3, 8), reason=\"monotonic clock differs on newer Pythons\")\ndef test_bucket_refills_over_time():\n    bucket = TokenBucket(capacity=1, refill_per_sec=100)\n    assert bucket.try_acquire()\n    time.sleep(0.05)\n    assert bucket.try_acquire()\n"
+      ]
+    },
+    "note": "skipif dressed up as a version guard, but the condition is true on every supported Python so the failing test never runs",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "py-pytest-skip-call-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_export.py": [
+        "import pytest\n\nfrom reports.export import to_csv\n\n\nclass TestCsvExport:\n    def test_header_row_matches_columns(self):\n        out = to_csv([{\"id\": 1, \"name\": \"a\"}])\n        assert out.splitlines()[0] == \"id,name\"\n\n    def test_escapes_embedded_commas(self):\n        out = to_csv([{\"id\": 1, \"name\": \"Smith, J\"}])\n        assert out.splitlines()[1] == '1,\"Smith, J\"'\n\n    def test_empty_input_yields_header_only(self):\n        assert to_csv([], columns=[\"id\"]) == \"id\\n\"\n",
+        "import pytest\n\nfrom reports.export import to_csv\n\n\nclass TestCsvExport:\n    def test_header_row_matches_columns(self):\n        out = to_csv([{\"id\": 1, \"name\": \"a\"}])\n        assert out.splitlines()[0] == \"id,name\"\n\n    def test_escapes_embedded_commas(self):\n        pytest.skip(\"quoting rules under review, see #412\")\n        out = to_csv([{\"id\": 1, \"name\": \"Smith, J\"}])\n        assert out.splitlines()[1] == '1,\"Smith, J\"'\n\n    def test_empty_input_yields_header_only(self):\n        assert to_csv([], columns=[\"id\"]) == \"id\\n\"\n"
+      ]
+    },
+    "note": "pytest.skip() inserted at the top of a failing test body; the assertions below it never execute",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "py-test-renamed-away-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_auth.py": [
+        "from datetime import datetime, timedelta\n\nimport pytest\n\nfrom auth.tokens import verify, issue\n\n\ndef test_accepts_fresh_token():\n    tok = issue(user_id=7, ttl=timedelta(minutes=5))\n    assert verify(tok).user_id == 7\n\n\ndef test_rejects_expired_token():\n    tok = issue(user_id=7, ttl=timedelta(seconds=-1))\n    with pytest.raises(ValueError, match=\"expired\"):\n        verify(tok)\n\n\ndef test_rejects_tampered_signature():\n    tok = issue(user_id=7, ttl=timedelta(minutes=5))\n    with pytest.raises(ValueError, match=\"signature\"):\n        verify(tok[:-2] + \"xx\")\n",
+        "from datetime import datetime, timedelta\n\nimport pytest\n\nfrom auth.tokens import verify, issue\n\n\ndef test_accepts_fresh_token():\n    tok = issue(user_id=7, ttl=timedelta(minutes=5))\n    assert verify(tok).user_id == 7\n\n\ndef check_rejects_expired_token():\n    tok = issue(user_id=7, ttl=timedelta(seconds=-1))\n    with pytest.raises(ValueError, match=\"expired\"):\n        verify(tok)\n\n\ndef test_rejects_tampered_signature():\n    tok = issue(user_id=7, ttl=timedelta(minutes=5))\n    with pytest.raises(ValueError, match=\"signature\"):\n        verify(tok[:-2] + \"xx\")\n"
+      ]
+    },
+    "note": "test_ prefix dropped from a test function so pytest no longer collects it; the body is untouched",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "py-assert-eq-to-not-none-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_orders.py": [
+        "from decimal import Decimal\n\nfrom shop.orders import Order, LineItem\n\n\ndef test_total_includes_all_lines():\n    order = Order(items=[LineItem(\"mug\", Decimal(\"9.99\"), 2)])\n    assert order.total == Decimal(\"19.98\")\n\n\ndef test_total_applies_percentage_discount():\n    order = Order(items=[LineItem(\"mug\", Decimal(\"10.00\"), 1)], discount_pct=10)\n    assert order.total == Decimal(\"9.00\")\n",
+        "from decimal import Decimal\n\nfrom shop.orders import Order, LineItem\n\n\ndef test_total_includes_all_lines():\n    order = Order(items=[LineItem(\"mug\", Decimal(\"9.99\"), 2)])\n    assert order.total is not None\n\n\ndef test_total_applies_percentage_discount():\n    order = Order(items=[LineItem(\"mug\", Decimal(\"10.00\"), 1)], discount_pct=10)\n    assert order.total is not None\n"
+      ]
+    },
+    "note": "exact equality on the computed total replaced with an \"is not None\" existence check; any wrong total now passes",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "py-assertequal-to-asserttrue-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_slugify.py": [
+        "import unittest\n\nfrom text.slug import slugify\n\n\nclass SlugifyTests(unittest.TestCase):\n    def test_lowercases_and_hyphenates(self):\n        self.assertEqual(slugify(\"Hello World\"), \"hello-world\")\n\n    def test_strips_punctuation(self):\n        self.assertEqual(slugify(\"Rock & Roll!\"), \"rock-roll\")\n\n    def test_collapses_repeated_separators(self):\n        self.assertEqual(slugify(\"a  --  b\"), \"a-b\")\n",
+        "import unittest\n\nfrom text.slug import slugify\n\n\nclass SlugifyTests(unittest.TestCase):\n    def test_lowercases_and_hyphenates(self):\n        self.assertTrue(slugify(\"Hello World\"))\n\n    def test_strips_punctuation(self):\n        self.assertTrue(slugify(\"Rock & Roll!\"))\n\n    def test_collapses_repeated_separators(self):\n        self.assertEqual(slugify(\"a  --  b\"), \"a-b\")\n"
+      ]
+    },
+    "note": "two of three assertEqual calls against the expected slug replaced by assertTrue, which passes for any non-empty string",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "py-except-pass-around-assert-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_scheduler.py": [
+        "from datetime import date\n\nfrom cron.scheduler import next_run\n\n\ndef test_next_run_skips_weekends():\n    got = next_run(\"0 9 * * 1-5\", after=date(2024, 3, 8))  # a Friday\n    assert got == date(2024, 3, 11)\n\n\ndef test_next_run_on_last_day_of_month():\n    got = next_run(\"0 0 L * *\", after=date(2024, 2, 1))\n    assert got == date(2024, 2, 29)\n",
+        "from datetime import date\n\nfrom cron.scheduler import next_run\n\n\ndef test_next_run_skips_weekends():\n    got = next_run(\"0 9 * * 1-5\", after=date(2024, 3, 8))  # a Friday\n    assert got == date(2024, 3, 11)\n\n\ndef test_next_run_on_last_day_of_month():\n    got = next_run(\"0 0 L * *\", after=date(2024, 2, 1))\n    try:\n        assert got == date(2024, 2, 29)\n    except AssertionError:\n        pass\n"
+      ]
+    },
+    "note": "the assertion is wrapped in try/except AssertionError: pass, so a failure is silently discarded",
+    "expect": {
+      "ids": [
+        "error-swallowed"
+      ]
+    }
+  },
+  {
+    "id": "py-approx-rel-widened-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_stats.py": [
+        "import pytest\n\nfrom analytics.stats import weighted_mean, stddev\n\n\ndef test_weighted_mean_basic():\n    assert weighted_mean([1.0, 2.0, 3.0], [1, 1, 2]) == pytest.approx(2.25, rel=1e-6)\n\n\ndef test_stddev_population():\n    assert stddev([2, 4, 4, 4, 5, 5, 7, 9]) == pytest.approx(2.0, rel=1e-6)\n",
+        "import pytest\n\nfrom analytics.stats import weighted_mean, stddev\n\n\ndef test_weighted_mean_basic():\n    assert weighted_mean([1.0, 2.0, 3.0], [1, 1, 2]) == pytest.approx(2.25, rel=1e-1)\n\n\ndef test_stddev_population():\n    assert stddev([2, 4, 4, 4, 5, 5, 7, 9]) == pytest.approx(2.0, rel=1e-6)\n"
+      ]
+    },
+    "note": "relative tolerance loosened from 1e-6 to 1e-1 (10%), hiding an off-by-a-lot regression in the mean",
+    "expect": {
+      "ids": [
+        "tolerance-widened"
+      ]
+    }
+  },
+  {
+    "id": "py-early-return-env-guard-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_reconcile.py": [
+        "from decimal import Decimal\n\nimport pytest\n\nfrom ledger.reconcile import reconcile\n\n\n@pytest.fixture\ndef ledger():\n    return [(\"inv-7\", Decimal(\"100.00\")), (\"inv-8\", Decimal(\"42.50\"))]\n\n\ndef bank_rows():\n    return [(\"inv-7\", Decimal(\"99.99\")), (\"inv-8\", Decimal(\"42.50\"))]\n\n\ndef test_reconcile_flags_mismatch(ledger):\n    report = reconcile(ledger, bank_rows())\n    assert report.mismatches == [(\"inv-7\", Decimal(\"0.01\"))]\n    assert report.matched == [\"inv-8\"]\n",
+        "import os\nfrom decimal import Decimal\n\nimport pytest\n\nfrom ledger.reconcile import reconcile\n\n\n@pytest.fixture\ndef ledger():\n    return [(\"inv-7\", Decimal(\"100.00\")), (\"inv-8\", Decimal(\"42.50\"))]\n\n\ndef bank_rows():\n    return [(\"inv-7\", Decimal(\"99.99\")), (\"inv-8\", Decimal(\"42.50\"))]\n\n\ndef test_reconcile_flags_mismatch(ledger):\n    if not os.environ.get(\"RECONCILE_STRICT\"):\n        return\n    report = reconcile(ledger, bank_rows())\n    assert report.mismatches == [(\"inv-7\", Decimal(\"0.01\"))]\n    assert report.matched == [\"inv-8\"]\n"
+      ]
+    },
+    "note": "an env-var guard returns before the assertions; the variable is never set anywhere so the test is a silent pass",
+    "expect": {
+      "ids": [
+        "early-return-added",
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "py-unittest-to-pytest-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_cart.py": [
+        "import unittest\n\nfrom shop.cart import Cart\n\n\nclass CartTests(unittest.TestCase):\n    def setUp(self):\n        self.cart = Cart()\n        self.cart.add(\"apple\", price=1.25, qty=2)\n\n    def test_total_sums_line_items(self):\n        self.assertEqual(self.cart.total(), 2.5)\n\n    def test_remove_unknown_sku_raises(self):\n        with self.assertRaises(KeyError):\n            self.cart.remove(\"pear\")\n\n    def test_clear_empties_cart(self):\n        self.cart.clear()\n        self.assertEqual(len(self.cart), 0)\n",
+        "import pytest\n\nfrom shop.cart import Cart\n\n\n@pytest.fixture\ndef cart():\n    c = Cart()\n    c.add(\"apple\", price=1.25, qty=2)\n    return c\n\n\ndef test_total_sums_line_items(cart):\n    assert cart.total() == 2.5\n\n\ndef test_remove_unknown_sku_raises(cart):\n    with pytest.raises(KeyError):\n        cart.remove(\"pear\")\n\n\ndef test_clear_empties_cart(cart):\n    cart.clear()\n    assert len(cart) == 0\n"
+      ]
+    },
+    "note": "unittest.TestCase with setUp converted to pytest functions and a fixture; every assertion is preserved as a plain assert"
+  },
+  {
+    "id": "py-parametrize-consolidation-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_slug.py": [
+        "from text.slug import slugify\n\n\ndef test_lowercases_and_hyphenates():\n    assert slugify('Hello World') == 'hello-world'\n\n\ndef test_strips_punctuation():\n    assert slugify('Rock & Roll!') == 'rock-roll'\n\n\ndef test_collapses_repeated_separators():\n    assert slugify('a  --  b') == 'a-b'\n",
+        "import pytest\n\nfrom text.slug import slugify\n\n\n@pytest.mark.parametrize(\n    'raw, expected',\n    [\n        ('Hello World', 'hello-world'),\n        ('Rock & Roll!', 'rock-roll'),\n        ('a  --  b', 'a-b'),\n        ('  leading and trailing  ', 'leading-and-trailing'),\n    ],\n)\ndef test_slugify(raw, expected):\n    assert slugify(raw) == expected\n"
+      ]
+    },
+    "note": "three near-identical tests folded into one parametrized test with a fourth row added; coverage went up, not down"
+  },
+  {
+    "id": "py-move-to-new-module-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_utils.py": [
+        "from utils.parse import parse_duration\nfrom utils.fmt import format_bytes\n\n\ndef test_parse_duration_handles_units():\n    assert parse_duration(\"1h30m\") == 5400\n    assert parse_duration(\"45s\") == 45\n\n\ndef test_format_bytes():\n    assert format_bytes(1024) == \"1.0 KiB\"\n    assert format_bytes(1536) == \"1.5 KiB\"\n    assert format_bytes(0) == \"0 B\"\n",
+        "from utils.parse import parse_duration\n\n\ndef test_parse_duration_handles_units():\n    assert parse_duration(\"1h30m\") == 5400\n    assert parse_duration(\"45s\") == 45\n"
+      ],
+      "tests/test_format.py": [
+        null,
+        "from utils.fmt import format_bytes\n\n\ndef test_format_bytes():\n    assert format_bytes(1024) == \"1.0 KiB\"\n    assert format_bytes(1536) == \"1.5 KiB\"\n    assert format_bytes(0) == \"0 B\"\n"
+      ]
+    },
+    "note": "a test moved verbatim into a new module that mirrors the source layout; nothing was dropped"
+  },
+  {
+    "id": "py-raises-narrowed-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_config.py": [
+        "import pytest\n\nfrom app.config import load_config\n\n\ndef test_missing_required_key_raises():\n    with pytest.raises(Exception):\n        load_config({\"port\": 8080})\n\n\ndef test_port_out_of_range_raises():\n    with pytest.raises(Exception):\n        load_config({\"host\": \"localhost\", \"port\": 70000})\n",
+        "import pytest\n\nfrom app.config import ConfigError, load_config\n\n\ndef test_missing_required_key_raises():\n    with pytest.raises(ConfigError, match=\"host\"):\n        load_config({\"port\": 8080})\n\n\ndef test_port_out_of_range_raises():\n    with pytest.raises(ValueError, match=\"port\"):\n        load_config({\"host\": \"localhost\", \"port\": 70000})\n"
+      ]
+    },
+    "note": "pytest.raises(Exception) narrowed to the specific exception types with match=, which is strictly stronger"
+  },
+  {
+    "id": "py-black-reformat-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_report.py": [
+        "import pytest\nfrom reports.build import build_report\n\ndef test_build_report_includes_all_sections():\n    report = build_report(sections=['summary', 'details', 'appendix'], author='qa-bot', include_toc=True)\n    assert report.sections == ['summary', 'details', 'appendix']\n    assert report.header == 'Report by qa-bot'\n\ndef test_build_report_requires_a_section():\n    with pytest.raises(ValueError, match='at least one section'):\n        build_report(sections=[], author='qa-bot')\n",
+        "import pytest\n\nfrom reports.build import build_report\n\n\ndef test_build_report_includes_all_sections():\n    report = build_report(\n        sections=[\"summary\", \"details\", \"appendix\"],\n        author=\"qa-bot\",\n        include_toc=True,\n    )\n    assert report.sections == [\"summary\", \"details\", \"appendix\"]\n    assert report.header == \"Report by qa-bot\"\n\n\ndef test_build_report_requires_a_section():\n    with pytest.raises(ValueError, match=\"at least one section\"):\n        build_report(sections=[], author=\"qa-bot\")\n"
+      ]
+    },
+    "note": "black/isort reformatting only: quote style, blank lines and a wrapped call; no assertion changed meaning"
+  },
+  {
+    "id": "py-approx-tight-for-float-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_stats.py": [
+        "from analytics.stats import weighted_mean\n\n\ndef test_weighted_mean_of_equal_weights_is_plain_mean():\n    assert weighted_mean([0.1, 0.2, 0.3], [1, 1, 1]) == 0.2\n\n\ndef test_weighted_mean_single_value():\n    assert weighted_mean([4.5], [3]) == 4.5\n",
+        "import pytest\n\nfrom analytics.stats import weighted_mean\n\n\ndef test_weighted_mean_of_equal_weights_is_plain_mean():\n    # 0.1 + 0.2 + 0.3 is not exactly 0.6 in binary floating point\n    assert weighted_mean([0.1, 0.2, 0.3], [1, 1, 1]) == pytest.approx(0.2, rel=1e-9)\n\n\ndef test_weighted_mean_single_value():\n    assert weighted_mean([4.5], [3]) == 4.5\n"
+      ]
+    },
+    "note": "exact float equality that failed on rounding replaced with pytest.approx at 1e-9, still far tighter than any real regression"
+  },
+  {
+    "id": "py-docstring-mentions-skip-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_migrations.py": [
+        "from db.migrate import pending_migrations\n\n\ndef test_no_pending_migrations_on_fresh_schema(fresh_db):\n    assert pending_migrations(fresh_db) == []\n\n\ndef test_pending_lists_unapplied_in_order(fresh_db):\n    fresh_db.mark_applied(\"0001_initial\")\n    assert pending_migrations(fresh_db) == [\"0002_add_index\", \"0003_backfill\"]\n",
+        "from db.migrate import pending_migrations\n\n\ndef test_no_pending_migrations_on_fresh_schema(fresh_db):\n    assert pending_migrations(fresh_db) == []\n\n\ndef test_pending_lists_unapplied_in_order(fresh_db):\n    \"\"\"Regression for issue 218: this used to call pytest.skip() when the fixture\n    database was missing, which hid a real ordering bug for months. The\n    fixture now builds an in-memory schema so the test always runs.\n    \"\"\"\n    fresh_db.mark_applied(\"0001_initial\")\n    assert pending_migrations(fresh_db) == [\"0002_add_index\", \"0003_backfill\"]\n"
+      ]
+    },
+    "note": "a docstring explaining history mentions pytest.skip() in prose; no skip is executed and the assertions are unchanged"
+  },
+  {
+    "id": "py-helper-with-asserts-1",
+    "kind": "legit",
+    "language": "py",
+    "files": {
+      "tests/test_tokens.py": [
+        "from auth.tokens import issue, refresh, exchange\n\n\ndef test_issue_returns_well_formed_token():\n    tok = issue(user_id=7)\n    assert tok.user_id == 7\n    assert len(tok.secret) == 32\n    assert tok.expires_at > tok.issued_at\n\n\ndef test_refresh_keeps_user_and_rotates_secret():\n    old = issue(user_id=7)\n    tok = refresh(old)\n    assert tok.user_id == 7\n    assert len(tok.secret) == 32\n    assert tok.expires_at > tok.issued_at\n    assert tok.secret != old.secret\n\n\ndef test_exchange_code_for_token():\n    tok = exchange(code=\"abc123\")\n    assert tok.user_id == 7\n    assert len(tok.secret) == 32\n    assert tok.expires_at > tok.issued_at\n",
+        "from auth.tokens import issue, refresh, exchange\n\n\ndef assert_well_formed(tok, user_id):\n    assert tok.user_id == user_id\n    assert len(tok.secret) == 32\n    assert tok.expires_at > tok.issued_at\n\n\ndef test_issue_returns_well_formed_token():\n    tok = issue(user_id=7)\n    assert_well_formed(tok, 7)\n\n\ndef test_refresh_keeps_user_and_rotates_secret():\n    old = issue(user_id=7)\n    tok = refresh(old)\n    assert_well_formed(tok, 7)\n    assert tok.secret != old.secret\n\n\ndef test_exchange_code_for_token():\n    tok = exchange(code=\"abc123\")\n    assert_well_formed(tok, 7)\n"
+      ]
+    },
+    "note": "three copies of the same trio of asserts moved into a helper called from every test; every check still runs"
+  }
+]

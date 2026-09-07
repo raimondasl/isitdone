@@ -124,8 +124,8 @@ describe('scanIntegrity: configuration', () => {
     expect(scanIntegrity(jest.files, jest).findings[0]?.message).toMatch(/ignore pattern/);
     const wf = modified('.github/workflows/ci.yml', '      - run: npm test\n', '      - run: npm run build\n        continue-on-error: true\n');
     const r = scanIntegrity(wf.files, wf);
-    // continue-on-error on a build step is medium; removing the test step is the high finding
-    expect(ids(r.findings).sort()).toEqual(['config-weakened:medium', 'test-step-removed:high']);
+    // continue-on-error on a build step is low; removing the test step is the high finding
+    expect(ids(r.findings).sort()).toEqual(['config-weakened:low', 'test-step-removed:high']);
     const still = modified('.github/workflows/ci.yml', '      - run: npm test\n', '      - run: npm ci\n      - run: npm test\n');
     expect(scanIntegrity(still.files, still).findings).toEqual([]);
     const pytest = modified('pyproject.toml', 'addopts = "-q"', 'addopts = "-q --ignore=tests/integration"');
