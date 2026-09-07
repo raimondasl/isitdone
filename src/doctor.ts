@@ -5,7 +5,7 @@ import { detectChecks } from './detect.js';
 import { loadConfig } from './config.js';
 import { gitInfo } from './git.js';
 import { installedHooks } from './init.js';
-import type { HostAdapter } from './hosts.js';
+import { HOST_NAMES, type HostAdapter } from './hosts.js';
 import { childEnv, killTree } from './run.js';
 import { isNewer, latestVersion } from './update.js';
 import { budgetSeconds, timeoutFor } from './verify.js';
@@ -105,6 +105,11 @@ export function looksBlocked(host: HostAdapter, probe: ProbeResult): { blocked: 
   }
   if (host.name === 'cursor') return typeof json.followup_message === 'string' && json.followup_message !== '' ? { blocked: true, reason: 'followup_message present' } : { blocked: false, reason: 'no followup_message' };
   if (host.name === 'gemini') return json.decision === 'deny' || json.decision === 'block' ? { blocked: true, reason: `decision ${String(json.decision)}` } : { blocked: false, reason: 'decision is not deny' };
+  if (host.name === 'augment') {
+    // Augment reads the decision only when it is nested under hookSpecificOutput.
+    const nested = (json.hookSpecificOutput ?? {}) as Record<string, unknown>;
+    return nested.decision === 'block' && typeof nested.reason === 'string' && nested.reason !== '' ? { blocked: true, reason: 'hookSpecificOutput.decision block with reason' } : { blocked: false, reason: 'no nested block decision' };
+  }
   return json.decision === 'block' && typeof json.reason === 'string' && json.reason !== '' ? { blocked: true, reason: 'decision block with reason' } : { blocked: false, reason: 'decision is not block' };
 }
 
@@ -154,7 +159,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   // hooks
   const hooks = installedHooks(root);
   if (!hooks.some((h) => h.event === 'stop')) {
-    checks.push({ name: 'hooks', ok: false, detail: 'no isitdone hook installed', hint: 'run `npx isitdone init` (add --agent codex|cursor|gemini|all for other hosts).' });
+    checks.push({ name: 'hooks', ok: false, detail: 'no isitdone hook installed', hint: `run \`npx isitdone init\` (add --agent <name>|all for other hosts: ${HOST_NAMES.filter((n) => n !== 'claude').join(', ')}).` });
   }
   const budget = budgetSeconds(detection.checks, config);
   for (const h of hooks) {

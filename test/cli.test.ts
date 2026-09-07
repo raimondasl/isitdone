@@ -125,6 +125,46 @@ describe('cli end-to-end', () => {
     expect(JSON.parse(readFileSync(join(repo.root, '.claude', 'settings.json'), 'utf8'))).toEqual({});
   });
 
+  it('init --agent all in a bare repo: every project host gets its file, devin and junie are skipped with a note, uninstall cleans up', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
+    const r = cli(['init', '--agent', 'all', '--no-doctor'], repo.root);
+    expect(r.code).toBe(0);
+    for (const name of ['Claude Code', 'Copilot CLI', 'Qwen Code', 'Goose', 'Factory Droid', 'Augment \\(Auggie\\)', 'OpenCode']) expect(r.stdout).toMatch(new RegExp(`${name}\\s+added`));
+    expect(r.stdout).toMatch(/Devin\s+skipped/);
+    expect(r.stdout).toMatch(/Junie CLI \(early access\)\s+skipped/);
+    expect(r.stdout).toMatch(/note: Devin also loads/);
+    expect(r.stdout).toMatch(/note: Junie CLI \(early access\) reads hooks only from/);
+    expect(existsSync(join(repo.root, '.opencode', 'plugins', 'isitdone.js'))).toBe(true);
+    expect(existsSync(join(repo.root, '.github', 'hooks', 'isitdone.json'))).toBe(true);
+    expect(existsSync(join(repo.root, '.devin'))).toBe(false);
+    expect(cli(['init', '--agent', 'junie'], repo.root).code).toBe(3);
+    expect(cli(['init', '--agent', 'continue'], repo.root).stderr).toMatch(/--agent must be one of claude, codex, .*junie, all, auto/);
+    const u = cli(['uninstall', '--agent', 'all'], repo.root);
+    expect(u.code).toBe(0);
+    expect(u.stdout).toMatch(/OpenCode\s+removed/);
+    expect(existsSync(join(repo.root, '.opencode', 'plugins', 'isitdone.js'))).toBe(false);
+    expect(JSON.parse(cli(['doctor', '--json', '--no-latest', '--no-probe'], repo.root).stdout).checks.find((c: { name: string }) => c.name === 'hooks').hint).toMatch(/copilot, qwen, goose/);
+  });
+
+  it('doctor probes prove the plumbing for the new hosts through their own payloads', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
+    const hosts = ['copilot', 'goose', 'droid', 'devin', 'augment', 'opencode'];
+    for (const host of hosts) expect(cli(['init', '--agent', host, '--command', LOCAL_HOOK(host), '--no-doctor'], repo.root).code).toBe(0);
+    const d = cli(['doctor', '--json', '--no-latest'], repo.root);
+    const report = JSON.parse(d.stdout) as { ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string }> };
+    for (const host of hosts) {
+      const probe = report.checks.find((c) => c.name === `probe:${host}`);
+      expect(probe?.ok, `${host}: ${probe?.detail}`).toBe(true);
+      expect(probe?.detail).toMatch(/was blocked/);
+    }
+    expect(report.checks.find((c) => c.name === 'hook:opencode')?.detail).toMatch(/isitdone\.js/);
+    expect(report.ok).toBe(true);
+    // the hook binaries answer the raw CLI too
+    const augment = cli(['hook', '--host', 'augment'], repo.root, JSON.stringify({ hook_event_name: 'Stop', conversation_id: 'c', workspace_roots: [repo.root], agent_stop_cause: 'end_turn' }));
+    expect(augment.code).toBe(0);
+    expect(augment.stdout.trim()).toBe(''); // tests pass: allow
+  });
+
   it('doctor flags a repo with no hook and no checks', () => {
     repo = tempRepo({ files: { 'README.md': 'x' } });
     const d = cli(['doctor', '--json', '--no-latest'], repo.root);

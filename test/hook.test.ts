@@ -264,6 +264,145 @@ describe('runHook (other hosts)', () => {
   });
 });
 
+describe('runHook (copilot, qwen, goose, droid, devin, augment, opencode, junie)', () => {
+  const failing = (extraFiles: Record<string, string> = {}) => tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), ...extraFiles } });
+  const payload = (host: keyof typeof HOSTS, root: string, extra: Record<string, unknown> = {}) => JSON.stringify({ ...HOSTS[host].synthetic(root, DONE), ...extra });
+
+  it('copilot: no last message means the full profile; allow/block are decision objects; stop_hook_active counts attempts', async () => {
+    repo = failing();
+    const blocked = await runHook({ host: 'copilot', stdin: payload('copilot', repo.root) });
+    expect(blocked.decision).toBe('block');
+    expect(blocked.result?.profile).toBe('full');
+    expect(blocked.why).toMatch(/did not provide the final message/);
+    expect(JSON.parse(blocked.stdout)).toMatchObject({ decision: 'block' });
+    expect(JSON.parse(blocked.stdout).reason).toMatch(/NOT DONE/);
+    expect(readState(repo.root, 'copilot', 'isitdone-doctor')?.attempts).toBe(1);
+    const cont = await runHook({ host: 'copilot', stdin: payload('copilot', repo.root, { stop_hook_active: true }) });
+    expect(JSON.parse(cont.stdout).reason).toMatch(/attempt 2\/3/);
+    repo.write('package.json', nodePkg({ test: PASS }));
+    const allowed = await runHook({ host: 'copilot', stdin: payload('copilot', repo.root, { stop_hook_active: true }) });
+    expect(allowed.decision).toBe('allow');
+    expect(JSON.parse(allowed.stdout)).toEqual({ decision: 'allow' });
+    expect(allowed.result?.receipt?.host).toBe('copilot-cli');
+  });
+
+  it('qwen: claim-gated like Claude Code, {} on allow, block with reason', async () => {
+    repo = failing({ 'package.json': nodePkg({ test: FAIL, lint: PASS }) });
+    const question = await runHook({ host: 'qwen', stdin: payload('qwen', repo.root, { last_assistant_message: QUESTION }) });
+    expect(question.decision).toBe('allow');
+    expect(question.stdout).toBe('{}');
+    expect(question.result?.ran.map((r) => r.id)).toEqual(['lint']);
+    const blocked = await runHook({ host: 'qwen', stdin: payload('qwen', repo.root) });
+    expect(blocked.decision).toBe('block');
+    expect(JSON.parse(blocked.stdout)).toMatchObject({ decision: 'block' });
+    expect(JSON.parse(blocked.stdout).reason).toMatch(/You claimed/);
+    expect(blocked.result?.receipt?.host).toBe('qwen-code');
+  });
+
+  it('goose: no cwd in the payload (falls back to the hook cwd); no flag, so attempts count per session and restart after giving up', async () => {
+    repo = failing({ '.isitdone.json': '{"maxAttempts": 2}' });
+    const stop = () => runHook({ host: 'goose', stdin: JSON.stringify({ event: 'Stop', session_id: 'g1', matcher_context: {}, last_assistant_message: DONE }), cwd: repo!.root });
+    const first = await stop();
+    expect(first.decision).toBe('block');
+    expect(JSON.parse(first.stdout)).toMatchObject({ decision: 'block' });
+    expect(JSON.parse(first.stdout).reason).toMatch(/attempt 1\/2/);
+    const second = await stop();
+    expect(JSON.parse(second.stdout).reason).toMatch(/attempt 2\/2/);
+    const third = await stop();
+    expect(third.decision).toBe('allow');
+    expect(third.why).toMatch(/letting the agent stop/);
+    expect(third.stdout).toBe(''); // goose has no channel for a message
+    expect(readState(repo.root, 'goose', 'g1')?.attempts).toBe(0);
+    // the turn ended with that allow; the next stop is a fresh turn
+    const fresh = await stop();
+    expect(JSON.parse(fresh.stdout).reason).toMatch(/attempt 1\/2/);
+    // a pass resets the counter too
+    repo.write('package.json', nodePkg({ test: PASS }));
+    expect((await stop()).decision).toBe('allow');
+    expect(readState(repo.root, 'goose', 'g1')?.attempts).toBe(0);
+  });
+
+  it('droid: Claude envelope, full profile, systemMessage on a give-up', async () => {
+    repo = failing({ '.isitdone.json': '{"maxAttempts": 1}' });
+    const blocked = await runHook({ host: 'droid', stdin: payload('droid', repo.root) });
+    expect(blocked.result?.profile).toBe('full');
+    expect(Object.keys(JSON.parse(blocked.stdout)).sort()).toEqual(['decision', 'reason']);
+    const gaveUp = await runHook({ host: 'droid', stdin: payload('droid', repo.root, { stop_hook_active: true }) });
+    expect(gaveUp.decision).toBe('allow');
+    expect(JSON.parse(gaveUp.stdout).systemMessage).toMatch(/still failing after 1 attempt/);
+  });
+
+  it('devin: payload without cwd, DEVIN_PROJECT_DIR points at the repo', async () => {
+    repo = failing();
+    process.env.DEVIN_PROJECT_DIR = repo.root;
+    try {
+      const blocked = await runHook({ host: 'devin', stdin: payload('devin', repo.root) });
+      expect(blocked.decision).toBe('block');
+      expect(blocked.result?.profile).toBe('full');
+      expect(JSON.parse(blocked.stdout)).toMatchObject({ decision: 'block' });
+      expect(readState(repo.root, 'devin', 'isitdone-doctor')?.attempts).toBe(1);
+      // the same registration under Claude's adapter also finds the repo through the env
+      const viaClaude = await runHook({ host: 'claude', stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 'v', prompt_id: 'p', stop_hook_active: false }) });
+      expect(viaClaude.decision).toBe('block');
+    } finally {
+      delete process.env.DEVIN_PROJECT_DIR;
+    }
+  });
+
+  it('augment: nested block, empty allow, skips interrupted turns, counts attempts without a flag', async () => {
+    repo = failing({ '.isitdone.json': '{"maxAttempts": 1}' });
+    const blocked = await runHook({ host: 'augment', stdin: payload('augment', repo.root) });
+    expect(blocked.decision).toBe('block');
+    expect(JSON.parse(blocked.stdout).hookSpecificOutput).toMatchObject({ hookEventName: 'Stop', decision: 'block' });
+    expect(JSON.parse(blocked.stdout).hookSpecificOutput.reason).toMatch(/You claimed/);
+    const interrupted = await runHook({ host: 'augment', stdin: payload('augment', repo.root, { agent_stop_cause: 'interrupted' }) });
+    expect(interrupted.decision).toBe('allow');
+    expect(interrupted.why).toMatch(/interrupted/);
+    const gaveUp = await runHook({ host: 'augment', stdin: payload('augment', repo.root) });
+    expect(gaveUp.decision).toBe('allow');
+    expect(JSON.parse(gaveUp.stdout).systemMessage).toMatch(/still failing/);
+    // without the conversation data the profile falls back to full
+    const noText = await runHook({ host: 'augment', stdin: JSON.stringify({ hook_event_name: 'Stop', conversation_id: 'c2', workspace_roots: [repo.root], agent_stop_cause: 'end_turn' }) });
+    expect(noText.result?.profile).toBe('full');
+  });
+
+  it('opencode: the shim payload blocks with a reason for the follow-up and honours the shim-derived flag', async () => {
+    repo = failing({ '.isitdone.json': '{"maxAttempts": 2}' });
+    const blocked = await runHook({ host: 'opencode', stdin: payload('opencode', repo.root) });
+    expect(blocked.decision).toBe('block');
+    expect(JSON.parse(blocked.stdout)).toMatchObject({ decision: 'block' });
+    expect(JSON.parse(blocked.stdout).reason).toMatch(/attempt 1\/2/);
+    const second = await runHook({ host: 'opencode', stdin: payload('opencode', repo.root, { stop_hook_active: true, loop_count: 1 }) });
+    expect(JSON.parse(second.stdout).reason).toMatch(/attempt 2\/2/);
+    const third = await runHook({ host: 'opencode', stdin: payload('opencode', repo.root, { stop_hook_active: true, loop_count: 2 }) });
+    expect(third.decision).toBe('allow');
+    expect(third.stdout).toBe('');
+  });
+
+  it('junie: no session id or cwd; state is per repository; stop_hook_active drives the cap', async () => {
+    repo = failing({ '.isitdone.json': '{"maxAttempts": 1}' });
+    const blocked = await runHook({ host: 'junie', stdin: payload('junie', repo.root), cwd: repo.root });
+    expect(blocked.decision).toBe('block');
+    expect(JSON.parse(blocked.stdout)).toMatchObject({ decision: 'block' });
+    expect(blocked.result?.receipt?.host).toBe('junie-cli');
+    expect(readState(repo.root, 'junie', null)?.attempts).toBe(1);
+    const gaveUp = await runHook({ host: 'junie', stdin: payload('junie', repo.root, { stop_hook_active: true }), cwd: repo.root });
+    expect(gaveUp.decision).toBe('allow');
+    expect(gaveUp.stdout).toBe('');
+  });
+
+  it('doctor mode blocks once for every host with its own synthetic payload (what `isitdone doctor` runs)', async () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
+    for (const name of Object.keys(HOSTS) as Array<keyof typeof HOSTS>) {
+      const host = HOSTS[name];
+      const o = await runHook({ host: name, stdin: JSON.stringify(host.synthetic(repo.root, DONE)), doctor: true, cwd: repo.root });
+      expect(o.decision, name).toBe('block');
+      expect(o.result?.ran.map((r) => r.id), name).toEqual(['doctor-probe']);
+    }
+    expect(existsSync(join(repo.root, '.isitdone', 'sessions'))).toBe(false);
+  });
+});
+
 describe('state files', () => {
   it('live under .isitdone/sessions, keyed by host and session, and are ignored by git', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }) } });

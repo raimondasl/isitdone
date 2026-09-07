@@ -8,7 +8,7 @@ import { collectDiff, type DiffResult } from './diff.js';
 import { checkEditedFile } from './editcheck.js';
 import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
 import { findRoot, gitTopLevel, RECEIPT_DIR } from './git.js';
-import { getHost, type HookInput, type HostAdapter } from './hosts.js';
+import { getHost, type HookInput, type HostAdapter, type HostName } from './hosts.js';
 import { ensureStateDir } from './receipt.js';
 import { formatBlockReason, integrityBlocks } from './report.js';
 import { verify, type ResolvedProfile, type VerifyResult } from './verify.js';
@@ -18,6 +18,10 @@ export const DEFAULT_MAX_ATTEMPTS = 3;
 const MAX_REASON_CHARS = 9000;
 const SESSIONS_DIR = 'sessions';
 const STATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** How the host is named in receipts (kept stable; older receipts already carry these). */
+const RECEIPT_HOST: Partial<Record<HostName, string>> = { claude: 'claude-code', gemini: 'gemini-cli', copilot: 'copilot-cli', qwen: 'qwen-code', junie: 'junie-cli', augment: 'auggie' };
+/** Tool events a stop-hook command may receive when a custom wrapper does not forward `--event edit`. */
+const EDIT_EVENT = /^(?:PostToolUse|AfterTool|afterFileEdit|tool\.execute\.after)$/i;
 
 export interface SessionState {
   host: string;
@@ -118,12 +122,15 @@ export function resolveProfile(config: IsitdoneConfig, input: HookInput, overrid
 /**
  * Is this stop a continuation of our own block in the same turn?
  * Hosts with stop_hook_active say so directly. Cursor only has a per-conversation loop_count, so a continuation is
- * "loop_count advanced by exactly one since we last blocked".
+ * "loop_count advanced by exactly one since we last blocked". Hosts with no flag at all (Goose, Augment, Continue)
+ * can only stop again right after our block because the agent kept going, so an unfinished block count means
+ * continuation; runHook resets that count when it gives up, since the turn ends with that allow.
  */
 export function isContinuation(input: HookInput, prev: SessionState | null): boolean {
   if (input.loopCount !== null && !input.stopHookActive) {
     return prev !== null && prev.loopCount !== null && prev.attempts > 0 && input.loopCount === prev.loopCount + 1;
   }
+  if (input.stopHookActive === null) return prev !== null && prev.attempts > 0;
   return input.stopHookActive;
 }
 
@@ -159,7 +166,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   const input = host.parse(raw);
 
   // A custom --command wrapper that does not forward "--event edit" sends its tool events here too; those are warn-only.
-  if (input.hookEventName && /^(?:PostToolUse|AfterTool|afterFileEdit)$/i.test(input.hookEventName)) {
+  if (input.hookEventName && EDIT_EVENT.test(input.hookEventName)) {
     const e = runEditHook({ host: opts.host, stdin: opts.stdin, cwd: opts.cwd, env });
     return { stdout: e.stdout, stderr: '', exitCode: 0, decision: 'allow', why: `${input.hookEventName} payload routed to the edit hook: ${e.why}`, result: null, attempts: 0 };
   }
@@ -190,8 +197,9 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   let attempts = continuation && prev ? prev.attempts : 0;
 
   if (continuation && attempts >= maxAttempts) {
-    // Record this stop so the next one (same loop_count on Cursor) counts as a new turn.
-    if (!doctor && prev) writeState(root, { ...prev, loopCount: input.loopCount, turnId: input.turnId, updatedAt: new Date().toISOString() });
+    // Record this stop so the next one (same loop_count on Cursor) counts as a new turn. Hosts without a flag start
+    // counting again: the turn ends with this allow, so their next stop can only follow a new prompt.
+    if (!doctor && prev) writeState(root, { ...prev, attempts: input.stopHookActive === null ? 0 : prev.attempts, loopCount: input.loopCount, turnId: input.turnId, updatedAt: new Date().toISOString() });
     return allow(`already blocked ${attempts} time(s) this turn (max ${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts), null, attempts);
   }
 
@@ -207,7 +215,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     config,
     profile,
     claim,
-    host: host.name === 'claude' ? 'claude-code' : host.name === 'gemini' ? 'gemini-cli' : host.name,
+    host: RECEIPT_HOST[host.name] ?? host.name,
     useCache: !doctor,
     dryRun: doctor,
   });
