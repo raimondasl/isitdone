@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.isitdone/
+coverage/
+*.log
+.DS_Store
+test/.build/
+.claude/settings.local.json

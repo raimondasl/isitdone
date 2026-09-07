@@ -1,0 +1,58 @@
+{
+  "name": "isitdone",
+  "version": "0.1.0",
+  "description": "Don't let your coding agent say \"done\" until the tests actually pass. Zero-LLM Stop hook + CLI for Claude Code, Codex, Cursor and Gemini CLI.",
+  "type": "module",
+  "bin": {
+    "isitdone": "dist/isitdone.js"
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli",
+    "ai-agent",
+    "coding-agent",
+    "stop-hook",
+    "hooks",
+    "verification",
+    "tests",
+    "ci",
+    "agent-skills",
+    "mcp"
+  ],
+  "author": "raimondasl",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raimondasl/isitdone.git"
+  },
+  "homepage": "https://github.com/raimondasl/isitdone#readme",
+  "bugs": {
+    "url": "https://github.com/raimondasl/isitdone/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
