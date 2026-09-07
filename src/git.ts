@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -49,7 +49,14 @@ function out(args: string[], cwd: string): string | null {
 
 export function gitTopLevel(cwd: string): string | null {
   const top = out(['rev-parse', '--show-toplevel'], cwd);
-  return top ? resolve(top) : null;
+  if (!top) return null;
+  // Windows may report 8.3 short names (C:/Users/RUNNER~1/...); the native realpath gives the canonical long form
+  // so paths coming from the host (long form) compare equal.
+  try {
+    return realpathSync.native(top);
+  } catch {
+    return resolve(top);
+  }
 }
 
 /**
@@ -158,7 +165,12 @@ function hasProjectMarker(dir: string): boolean {
  * project. Falls back to the git top-level, or to `cwd` outside git. This is where config, checks and receipts live.
  */
 export function findRoot(cwd: string): string {
-  const start = resolve(cwd);
+  let start = resolve(cwd);
+  try {
+    start = realpathSync.native(start);
+  } catch {
+    // keep the resolved path
+  }
   const top = gitTopLevel(start);
   let dir = start;
   for (;;) {
