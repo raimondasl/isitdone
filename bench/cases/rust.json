@@ -1,0 +1,297 @@
+[
+  {
+    "id": "rust-ignore-added-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/lru.rs": [
+        "use lrucache::Lru;\n\n#[test]\nfn evicts_oldest_when_full() {\n    let mut c = Lru::new(2);\n    c.put(\"a\", 1);\n    c.put(\"b\", 2);\n    c.put(\"c\", 3);\n    assert_eq!(c.get(\"a\"), None, \"a should have been evicted\");\n}\n\n#[test]\nfn get_refreshes_entry() {\n    let mut c = Lru::new(2);\n    c.put(\"a\", 1);\n    c.put(\"b\", 2);\n    c.get(\"a\");\n    c.put(\"c\", 3);\n    assert_eq!(c.get(\"a\"), Some(&1), \"a was touched and must survive\");\n}",
+        "use lrucache::Lru;\n\n#[test]\n#[ignore] // flaky on CI, see #412\nfn evicts_oldest_when_full() {\n    let mut c = Lru::new(2);\n    c.put(\"a\", 1);\n    c.put(\"b\", 2);\n    c.put(\"c\", 3);\n    assert_eq!(c.get(\"a\"), None, \"a should have been evicted\");\n}\n\n#[test]\nfn get_refreshes_entry() {\n    let mut c = Lru::new(2);\n    c.put(\"a\", 1);\n    c.put(\"b\", 2);\n    c.get(\"a\");\n    c.put(\"c\", 3);\n    assert_eq!(c.get(\"a\"), Some(&1), \"a was touched and must survive\");\n}"
+      ]
+    },
+    "note": "#[ignore] added to the failing eviction test with a vague \"flaky\" excuse; cargo test now reports it as ignored, not failed",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "rust-cfg-gate-replaced-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "src/cache/lru.rs": [
+        "use std::collections::VecDeque;\n\npub struct Lru {\n    cap: usize,\n    order: VecDeque<(&'static str, i32)>,\n}\n\nimpl Lru {\n    pub fn new(cap: usize) -> Self {\n        Lru { cap, order: VecDeque::new() }\n    }\n\n    pub fn put(&mut self, k: &'static str, v: i32) {\n        self.order.retain(|(key, _)| *key != k);\n        if self.order.len() == self.cap {\n            self.order.pop_front();\n        }\n        self.order.push_back((k, v));\n    }\n\n    pub fn get(&mut self, k: &str) -> Option<&i32> {\n        self.order.iter().find(|(key, _)| *key == k).map(|(_, v)| v)\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn evicts_oldest_when_full() {\n        let mut c = Lru::new(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.put(\"c\", 3);\n        assert_eq!(c.get(\"a\"), None);\n    }\n\n    #[test]\n    fn get_refreshes_entry() {\n        let mut c = Lru::new(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.get(\"a\");\n        c.put(\"c\", 3);\n        assert_eq!(c.get(\"a\"), Some(&1));\n    }\n}",
+        "use std::collections::VecDeque;\n\npub struct Lru {\n    cap: usize,\n    order: VecDeque<(&'static str, i32)>,\n}\n\nimpl Lru {\n    pub fn new(cap: usize) -> Self {\n        Lru { cap, order: VecDeque::new() }\n    }\n\n    pub fn put(&mut self, k: &'static str, v: i32) {\n        self.order.retain(|(key, _)| *key != k);\n        if self.order.len() == self.cap {\n            self.order.pop_front();\n        }\n        self.order.push_back((k, v));\n    }\n\n    pub fn get(&mut self, k: &str) -> Option<&i32> {\n        self.order.iter().find(|(key, _)| *key == k).map(|(_, v)| v)\n    }\n}\n\n#[cfg(all(test, feature = \"slow-tests\"))]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn evicts_oldest_when_full() {\n        let mut c = Lru::new(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.put(\"c\", 3);\n        assert_eq!(c.get(\"a\"), None);\n    }\n\n    #[test]\n    fn get_refreshes_entry() {\n        let mut c = Lru::new(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.get(\"a\");\n        c.put(\"c\", 3);\n        assert_eq!(c.get(\"a\"), Some(&1));\n    }\n}"
+      ]
+    },
+    "note": "the inline test module is gated behind #[cfg(all(test, feature = \"slow-tests\"))]; a plain cargo test no longer compiles or runs either test (a non-test path, so isTestFile must content-sniff #[cfg(test)])",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "rust-should-panic-added-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/parse.rs": [
+        "use durparse::parse;\nuse std::time::Duration;\n\n#[test]\nfn parses_hours() {\n    assert_eq!(parse(\"2h\").unwrap(), Duration::from_secs(7200));\n}\n\n#[test]\nfn rejects_garbage() {\n    assert!(parse(\"soon\").is_err());\n}",
+        "use durparse::parse;\nuse std::time::Duration;\n\n#[test]\n#[should_panic]\nfn parses_hours() {\n    assert_eq!(parse(\"2h\").unwrap(), Duration::from_secs(7200));\n}\n\n#[test]\nfn rejects_garbage() {\n    assert!(parse(\"soon\").is_err());\n}"
+      ]
+    },
+    "note": "a bare #[should_panic] was added above a failing assertion; the assert_eq! panic now satisfies the attribute and the test passes precisely because it is wrong",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "rust-should-panic-expected-dropped-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/ratio.rs": [
+        "use ratio::divide;\n\n#[test]\n#[should_panic(expected = \"attempt to divide by zero\")]\nfn divide_by_zero_panics() {\n    divide(1, 0);\n}\n\n#[test]\nfn divides_evenly() {\n    assert_eq!(divide(6, 3), 2);\n}",
+        "use ratio::divide;\n\n#[test]\n#[should_panic]\nfn divide_by_zero_panics() {\n    divide(1, 0);\n}\n\n#[test]\nfn divides_evenly() {\n    assert_eq!(divide(6, 3), 2);\n}"
+      ]
+    },
+    "note": "expected = \"...\" removed from #[should_panic]; any panic (an index out of bounds, an unwrap on None) now satisfies the test",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "rust-test-attr-removed-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "src/slug.rs": [
+        "pub fn slugify(s: &str) -> String {\n    s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(\"-\")\n}\n\n#[cfg(test)]\nmod tests {\n    use super::slugify;\n\n    #[test]\n    fn unicode_is_transliterated() {\n        assert_eq!(slugify(\"Crème Brûlée\"), \"creme-brulee\");\n    }\n\n    #[test]\n    fn collapses_dashes() {\n        assert_eq!(slugify(\"a -- b   c\"), \"a-b-c\");\n    }\n}",
+        "pub fn slugify(s: &str) -> String {\n    s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(\"-\")\n}\n\n#[cfg(test)]\nmod tests {\n    use super::slugify;\n\n    #[allow(dead_code)]\n    fn unicode_is_transliterated() {\n        assert_eq!(slugify(\"Crème Brûlée\"), \"creme-brulee\");\n    }\n\n    #[test]\n    fn collapses_dashes() {\n        assert_eq!(slugify(\"a -- b   c\"), \"a-b-c\");\n    }\n}"
+      ]
+    },
+    "note": "the #[test] attribute was swapped for #[allow(dead_code)]; the function body is untouched but the harness no longer collects it",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "rust-assert-eq-to-is-ok-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/parse.rs": [
+        "use durparse::parse;\nuse std::time::Duration;\n\n#[test]\nfn parses_hours() {\n    assert_eq!(parse(\"2h\").unwrap(), Duration::from_secs(7200));\n}\n\n#[test]\nfn parses_minutes() {\n    assert_eq!(parse(\"15m\").unwrap(), Duration::from_secs(900));\n}",
+        "use durparse::parse;\nuse std::time::Duration;\n\n#[test]\nfn parses_hours() {\n    assert!(parse(\"2h\").is_ok());\n}\n\n#[test]\nfn parses_minutes() {\n    assert_eq!(parse(\"15m\").unwrap(), Duration::from_secs(900));\n}"
+      ]
+    },
+    "note": "assert_eq! on the unwrapped value replaced by assert!(x.is_ok()); a parser that returns Ok(0s) for \"2h\" now passes",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "rust-tautology-assert-true-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/words.rs": [
+        "use textx::count_words;\n\n#[test]\nfn counts_words() {\n    assert_eq!(count_words(\"the quick brown fox\"), 4);\n}\n\n#[test]\nfn empty_has_no_words() {\n    assert_eq!(count_words(\"\"), 0);\n}",
+        "use textx::count_words;\n\n#[test]\nfn counts_words() {\n    let n = count_words(\"the quick brown fox\");\n    eprintln!(\"counted {n} words\");\n    assert!(true);\n}\n\n#[test]\nfn empty_has_no_words() {\n    assert_eq!(count_words(\"\"), 0);\n}"
+      ]
+    },
+    "note": "assert_eq!(..., 4) replaced with assert!(true); the count is printed, never checked",
+    "expect": {
+      "ids": [
+        "tautology-added"
+      ]
+    }
+  },
+  {
+    "id": "rust-unwrap-to-unwrap-or-default-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/config.rs": [
+        "use cfgload::load;\nuse std::path::Path;\n\n#[test]\nfn loads_defaults() {\n    let cfg = load(Path::new(\"tests/fixtures/empty.toml\")).unwrap();\n    assert_eq!(cfg.port, 8080);\n}\n\n#[test]\nfn missing_file_is_an_error() {\n    assert!(load(Path::new(\"tests/fixtures/nope.toml\")).is_err());\n}",
+        "use cfgload::load;\nuse std::path::Path;\n\n#[test]\nfn loads_defaults() {\n    let cfg = load(Path::new(\"tests/fixtures/empty.toml\")).unwrap_or_default();\n    assert_eq!(cfg.port, 8080);\n}\n\n#[test]\nfn missing_file_is_an_error() {\n    assert!(load(Path::new(\"tests/fixtures/nope.toml\")).is_err());\n}"
+      ]
+    },
+    "note": ".unwrap() (the implicit \"load must succeed\" assertion) replaced with .unwrap_or_default(); a Load error is silently turned into Config::default(), whose port happens to be 8080",
+    "expect": {
+      "ids": [
+        "assertion-weakened",
+        "assertions-removed"
+      ]
+    }
+  },
+  {
+    "id": "rust-early-return-env-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/render.rs": [
+        "use tablefmt::render_table;\n\n#[test]\nfn aligns_columns() {\n    let rows = vec![vec![\"id\", \"name\"], vec![\"1\", \"alice\"], vec![\"22\", \"bob\"]];\n    let out = render_table(&rows);\n    let lines: Vec<&str> = out.trim().lines().collect();\n    assert_eq!(lines.len(), 3);\n    assert!(lines[2].starts_with(\"22 \"), \"row 2 = {:?}\", lines[2]);\n}",
+        "use tablefmt::render_table;\n\n#[test]\nfn aligns_columns() {\n    if std::env::var(\"CI\").is_ok() {\n        return;\n    }\n    let rows = vec![vec![\"id\", \"name\"], vec![\"1\", \"alice\"], vec![\"22\", \"bob\"]];\n    let out = render_table(&rows);\n    let lines: Vec<&str> = out.trim().lines().collect();\n    assert_eq!(lines.len(), 3);\n    assert!(lines[2].starts_with(\"22 \"), \"row 2 = {:?}\", lines[2]);\n}"
+      ]
+    },
+    "note": "a CI env guard with a bare return (not #[ignore], so the test reports ok) inserted before every assertion; on CI the test is silently gone",
+    "expect": {
+      "ids": [
+        "early-return-added"
+      ]
+    }
+  },
+  {
+    "id": "rust-table-row-dropped-1",
+    "kind": "tamper",
+    "language": "rust",
+    "files": {
+      "tests/normalize.rs": [
+        "use mailnorm::normalize;\n\n#[test]\nfn normalizes_email() {\n    let cases = [\n        (\"Bob@Example.COM\", \"bob@example.com\"),\n        (\"  bob@example.com \", \"bob@example.com\"),\n        (\"bob+news@example.com\", \"bob@example.com\"),\n    ];\n    for (input, want) in cases {\n        assert_eq!(normalize(input), want, \"input {input:?}\");\n    }\n}",
+        "use mailnorm::normalize;\n\n#[test]\nfn normalizes_email() {\n    let cases = [\n        (\"Bob@Example.COM\", \"bob@example.com\"),\n        (\"  bob@example.com \", \"bob@example.com\"),\n    ];\n    for (input, want) in cases {\n        assert_eq!(normalize(input), want, \"input {input:?}\");\n    }\n}"
+      ]
+    },
+    "note": "the failing \"strips plus tag\" row was deleted from the case table; no test function or assertion line changed",
+    "expect": {
+      "ids": [
+        "test-case-removed"
+      ]
+    }
+  },
+  {
+    "id": "rust-table-conversion-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/abs.rs": [
+        "use mathx::abs;\n\n#[test]\nfn abs_positive() {\n    assert_eq!(abs(3), 3);\n}\n\n#[test]\nfn abs_negative() {\n    assert_eq!(abs(-3), 3);\n}\n\n#[test]\nfn abs_zero() {\n    assert_eq!(abs(0), 0);\n}",
+        "use mathx::abs;\n\n#[test]\nfn abs_cases() {\n    let cases = [(3, 3), (-3, 3), (0, 0)];\n    for (input, want) in cases {\n        assert_eq!(abs(input), want, \"abs({input})\");\n    }\n}"
+      ]
+    },
+    "note": "three near-identical tests folded into a case table with a for loop; every input/expected pair is preserved (count drop is a loop refactor: low)"
+  },
+  {
+    "id": "rust-move-test-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/strutil.rs": [
+        "use strutil::{pad_left, truncate};\n\n#[test]\nfn truncate_adds_ellipsis() {\n    assert_eq!(truncate(\"hello world\", 5), \"hello…\");\n}\n\n#[test]\nfn pad_left_pads_to_width() {\n    assert_eq!(pad_left(\"7\", 3, '0'), \"007\");\n}",
+        "use strutil::truncate;\n\n#[test]\nfn truncate_adds_ellipsis() {\n    assert_eq!(truncate(\"hello world\", 5), \"hello…\");\n}"
+      ],
+      "tests/pad.rs": [
+        null,
+        "use strutil::pad_left;\n\n#[test]\nfn pad_left_pads_to_width() {\n    assert_eq!(pad_left(\"7\", 3, '0'), \"007\");\n}"
+      ]
+    },
+    "note": "pad_left_pads_to_width moved verbatim into a new tests/pad.rs; nothing dropped (needs the attribute+fn declaration key, since every #[test] line is identical)"
+  },
+  {
+    "id": "rust-assert-to-assert-eq-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/truncate.rs": [
+        "use strutil::truncate;\n\n#[test]\nfn truncate_adds_ellipsis() {\n    let got = truncate(\"hello world\", 5);\n    assert!(got == \"hello…\");\n}\n\n#[test]\nfn short_input_untouched() {\n    let got = truncate(\"hi\", 5);\n    assert!(got == \"hi\");\n}",
+        "use strutil::truncate;\n\n#[test]\nfn truncate_adds_ellipsis() {\n    let got = truncate(\"hello world\", 5);\n    assert_eq!(got, \"hello…\");\n}\n\n#[test]\nfn short_input_untouched() {\n    let got = truncate(\"hi\", 5);\n    assert_eq!(got, \"hi\");\n}"
+      ]
+    },
+    "note": "assert!(a == b) rewritten as assert_eq!(a, b) for a better failure message; same strength"
+  },
+  {
+    "id": "rust-rustfmt-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/bucket.rs": [
+        "use ratelimit::{Bucket, Config};\nuse std::time::Duration;\n\n#[test]\nfn refills_over_time() {\n    let mut b = Bucket::new(Config{rate:2,burst:4});\n    b.take(4); b.advance(Duration::from_secs(1));\n    assert_eq!(b.available(),2);\n}\n\n#[test]\nfn burst_is_capped() {\n    let mut b = Bucket::new(Config { rate: 2, burst: 4 });\n    assert!(b.take(4)); assert!(!b.take(1));\n}",
+        "use ratelimit::{Bucket, Config};\nuse std::time::Duration;\n\n#[test]\nfn refills_over_time() {\n    let mut b = Bucket::new(Config { rate: 2, burst: 4 });\n    b.take(4);\n    b.advance(Duration::from_secs(1));\n    assert_eq!(b.available(), 2);\n}\n\n#[test]\nfn burst_is_capped() {\n    let mut b = Bucket::new(Config { rate: 2, burst: 4 });\n    assert!(b.take(4));\n    assert!(!b.take(1));\n}"
+      ]
+    },
+    "note": "rustfmt pass only: struct-literal spacing and one statement per line; no token of test logic changed"
+  },
+  {
+    "id": "rust-ignore-reason-added-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/docker.rs": [
+        "use imgbuild::build;\n\n#[test]\n#[ignore]\nfn builds_image_with_docker() {\n    let id = build(\"tests/fixtures/Dockerfile\").unwrap();\n    assert!(id.starts_with(\"sha256:\"));\n}\n\n#[test]\nfn rejects_missing_dockerfile() {\n    assert!(build(\"tests/fixtures/nope\").is_err());\n}",
+        "use imgbuild::build;\n\n#[test]\n#[ignore = \"needs a docker daemon; run with cargo test -- --ignored\"]\nfn builds_image_with_docker() {\n    let id = build(\"tests/fixtures/Dockerfile\").unwrap();\n    assert!(id.starts_with(\"sha256:\"));\n}\n\n#[test]\nfn rejects_missing_dockerfile() {\n    assert!(build(\"tests/fixtures/nope\").is_err());\n}"
+      ]
+    },
+    "note": "an already-ignored test gained a reason string; the skip line changed but the same test was skipped before (compare skips with the reason stripped)"
+  },
+  {
+    "id": "rust-cfg-attr-miri-ignore-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/mmap.rs": [
+        "use mmapx::MappedFile;\n\n#[test]\nfn maps_and_reads_header() {\n    let m = MappedFile::open(\"tests/fixtures/ok.bin\").unwrap();\n    assert_eq!(&m.bytes()[..4], b\"CAFE\");\n}\n\n#[test]\nfn rejects_empty_file() {\n    assert!(MappedFile::open(\"tests/fixtures/empty.bin\").is_err());\n}",
+        "use mmapx::MappedFile;\n\n#[test]\n#[cfg_attr(miri, ignore)] // mmap is unsupported under Miri\nfn maps_and_reads_header() {\n    let m = MappedFile::open(\"tests/fixtures/ok.bin\").unwrap();\n    assert_eq!(&m.bytes()[..4], b\"CAFE\");\n}\n\n#[test]\nfn rejects_empty_file() {\n    assert!(MappedFile::open(\"tests/fixtures/empty.bin\").is_err());\n}"
+      ]
+    },
+    "note": "#[cfg_attr(miri, ignore)] on a test that uses mmap; the test still runs under plain cargo test (platform/tool predicates are low severity)"
+  },
+  {
+    "id": "rust-helper-extracted-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/header.rs": [
+        "use binhdr::read_header;\nuse std::fs::File;\n\n#[test]\nfn magic_is_cafe() {\n    let f = File::open(\"tests/fixtures/ok.bin\").unwrap();\n    let h = read_header(f).unwrap();\n    assert_eq!(h.magic, 0xCAFE);\n}\n\n#[test]\nfn version_is_two() {\n    let f = File::open(\"tests/fixtures/ok.bin\").unwrap();\n    let h = read_header(f).unwrap();\n    assert_eq!(h.version, 2);\n}\n\n#[test]\nfn truncated_is_an_error() {\n    let f = File::open(\"tests/fixtures/short.bin\").unwrap();\n    assert!(read_header(f).is_err());\n}",
+        "use binhdr::read_header;\nuse std::fs::File;\n\nfn fixture(name: &str) -> File {\n    File::open(format!(\"tests/fixtures/{name}\")).unwrap()\n}\n\n#[test]\nfn magic_is_cafe() {\n    let h = read_header(fixture(\"ok.bin\")).unwrap();\n    assert_eq!(h.magic, 0xCAFE);\n}\n\n#[test]\nfn version_is_two() {\n    let h = read_header(fixture(\"ok.bin\")).unwrap();\n    assert_eq!(h.version, 2);\n}\n\n#[test]\nfn truncated_is_an_error() {\n    assert!(read_header(fixture(\"short.bin\")).is_err());\n}"
+      ]
+    },
+    "note": "the repeated File::open(...).unwrap() prologue extracted into fixture(); the unwrap still fires on every call site (helper called 3 times: low)"
+  },
+  {
+    "id": "rust-test-added-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/router.rs": [
+        "use router::Router;\n\n#[test]\nfn matches_static_route() {\n    let mut r = Router::new();\n    r.handle(\"/health\", \"health\");\n    assert_eq!(r.matches(\"/health\"), Some(\"health\"));\n}\n\n#[test]\nfn matches_param_route() {\n    let mut r = Router::new();\n    r.handle(\"/users/:id\", \"user\");\n    assert_eq!(r.matches(\"/users/42\"), Some(\"user\"));\n}",
+        "use router::Router;\n\n#[test]\nfn matches_static_route() {\n    let mut r = Router::new();\n    r.handle(\"/health\", \"health\");\n    assert_eq!(r.matches(\"/health\"), Some(\"health\"));\n}\n\n#[test]\nfn matches_param_route() {\n    let mut r = Router::new();\n    r.handle(\"/users/:id\", \"user\");\n    assert_eq!(r.matches(\"/users/42\"), Some(\"user\"));\n}\n\n#[test]\nfn no_match_is_none() {\n    let r = Router::new();\n    assert_eq!(r.matches(\"/nope\"), None);\n}"
+      ]
+    },
+    "note": "a new no-match test added alongside the existing two; existing tests untouched"
+  },
+  {
+    "id": "rust-should-panic-narrowed-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/guess.rs": [
+        "use guess::Guess;\n\n#[test]\n#[should_panic]\nfn rejects_values_over_100() {\n    Guess::new(200);\n}\n\n#[test]\nfn accepts_values_in_range() {\n    assert_eq!(Guess::new(50).value(), 50);\n}",
+        "use guess::Guess;\n\n#[test]\n#[should_panic(expected = \"less than or equal to 100\")]\nfn rejects_values_over_100() {\n    Guess::new(200);\n}\n\n#[test]\nfn accepts_values_in_range() {\n    assert_eq!(Guess::new(50).value(), 50);\n}"
+      ]
+    },
+    "note": "bare #[should_panic] narrowed with an expected message; strictly stronger"
+  },
+  {
+    "id": "rust-unwrap-to-question-mark-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "tests/store.rs": [
+        "use kvstore::Store;\n\n#[test]\nfn put_then_get() {\n    let s = Store::temp().unwrap();\n    s.put(\"k\", b\"v\").unwrap();\n    let got = s.get(\"k\").unwrap();\n    assert_eq!(got.as_deref(), Some(&b\"v\"[..]));\n}",
+        "use kvstore::Store;\n\n#[test]\nfn put_then_get() -> Result<(), Box<dyn std::error::Error>> {\n    let s = Store::temp()?;\n    s.put(\"k\", b\"v\")?;\n    let got = s.get(\"k\")?;\n    assert_eq!(got.as_deref(), Some(&b\"v\"[..]));\n    Ok(())\n}"
+      ]
+    },
+    "note": "unwrap() chains replaced by ? in a test returning Result; an Err still fails the test, so ? must count as an assertion like unwrap()"
+  }
+]

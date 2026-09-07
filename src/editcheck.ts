@@ -46,17 +46,18 @@ function insideRepo(path: string): boolean {
   return path !== '' && !path.startsWith('..') && !isAbsolute(path) && !/^[A-Za-z]:/.test(path) && !path.startsWith('//');
 }
 
-const isScannable = (p: string) => isTestFile(p) || isTestConfigFile(p);
-
 /**
  * Scan one edited file. `file` may be absolute or relative to `cwd`. `diff` supplies the working-tree diff (taken
- * lazily, so a hook run that touches several files diffs once and a non-test file costs nothing).
+ * lazily, so a hook run that touches several files diffs once and a non-test file costs nothing). Rust/Java/C# files
+ * outside the test paths are sniffed for an inline `#[cfg(test)]` module / `@Test` / `[Fact]` (working tree first,
+ * then the base), so an edited inline test module is not invisible to the warn-only hook.
  */
 export function checkEditedFile(cwd: string, file: string, base = 'HEAD', diff?: () => DiffResult): EditCheck | null {
   const top = gitTopLevel(cwd);
   if (!top) return null;
   const path = toRepoPath(top, file, cwd);
   if (!insideRepo(path)) return null;
+  const isScannable = (p: string) => isTestFile(p, [() => readNow(top, p), () => readAtBase(top, p, base)]) || isTestConfigFile(p);
   if (!isScannable(path)) return { path, report: null, notable: [], note: null };
   const d = diff ? diff() : collectDiff(top, base);
   if (d.error) return null;

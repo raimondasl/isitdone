@@ -1,0 +1,181 @@
+[
+  {
+    "id": "cs-fact-skip-1",
+    "kind": "tamper",
+    "language": "csharp",
+    "files": {
+      "tests/Cache.Tests/LruCacheTests.cs": [
+        "using Xunit;\n\nnamespace Cache.Tests;\n\npublic class LruCacheTests\n{\n    [Fact]\n    public void EvictsOldestWhenFull()\n    {\n        var c = new LruCache<string, int>(2);\n        c.Put(\"a\", 1);\n        c.Put(\"b\", 2);\n        c.Put(\"c\", 3);\n        Assert.False(c.TryGet(\"a\", out _), \"a should have been evicted\");\n    }\n\n    [Fact]\n    public void GetRefreshesEntry()\n    {\n        var c = new LruCache<string, int>(2);\n        c.Put(\"a\", 1);\n        c.Put(\"b\", 2);\n        c.TryGet(\"a\", out _);\n        c.Put(\"c\", 3);\n        Assert.True(c.TryGet(\"a\", out var v));\n        Assert.Equal(1, v);\n    }\n}",
+        "using Xunit;\n\nnamespace Cache.Tests;\n\npublic class LruCacheTests\n{\n    [Fact(Skip = \"flaky on CI, see #412\")]\n    public void EvictsOldestWhenFull()\n    {\n        var c = new LruCache<string, int>(2);\n        c.Put(\"a\", 1);\n        c.Put(\"b\", 2);\n        c.Put(\"c\", 3);\n        Assert.False(c.TryGet(\"a\", out _), \"a should have been evicted\");\n    }\n\n    [Fact]\n    public void GetRefreshesEntry()\n    {\n        var c = new LruCache<string, int>(2);\n        c.Put(\"a\", 1);\n        c.Put(\"b\", 2);\n        c.TryGet(\"a\", out _);\n        c.Put(\"c\", 3);\n        Assert.True(c.TryGet(\"a\", out var v));\n        Assert.Equal(1, v);\n    }\n}"
+      ]
+    },
+    "note": "[Fact] became [Fact(Skip = \"flaky\")] on the failing eviction test; xUnit reports it as skipped",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "cs-equal-to-notnull-1",
+    "kind": "tamper",
+    "language": "csharp",
+    "files": {
+      "tests/Greet.Tests/GreeterTests.cs": [
+        "using Xunit;\n\nnamespace Greet.Tests;\n\npublic class GreeterTests\n{\n    [Fact]\n    public void FormalGreeting()\n    {\n        var got = Greeter.Greet(\"Ada\", Style.Formal);\n        Assert.Equal(\"Good day, Ada.\", got);\n    }\n\n    [Fact]\n    public void CasualGreeting()\n    {\n        Assert.Equal(\"Hey Ada!\", Greeter.Greet(\"Ada\", Style.Casual));\n    }\n}",
+        "using Xunit;\n\nnamespace Greet.Tests;\n\npublic class GreeterTests\n{\n    [Fact]\n    public void FormalGreeting()\n    {\n        var got = Greeter.Greet(\"Ada\", Style.Formal);\n        Assert.NotNull(got);\n    }\n\n    [Fact]\n    public void CasualGreeting()\n    {\n        Assert.Equal(\"Hey Ada!\", Greeter.Greet(\"Ada\", Style.Casual));\n    }\n}"
+      ]
+    },
+    "note": "Assert.Equal against the exact greeting replaced by Assert.NotNull on a string that is never null",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "cs-throws-any-exception-1",
+    "kind": "tamper",
+    "language": "csharp",
+    "files": {
+      "tests/Auth.Tests/TokenVerifierTests.cs": [
+        "using System;\nusing Xunit;\n\nnamespace Auth.Tests;\n\npublic class TokenVerifierTests\n{\n    private readonly TokenIssuer _issuer = new(\"secret\");\n    private readonly TokenVerifier _verifier = new(\"secret\");\n\n    [Fact]\n    public void ExpiredTokenIsRejected()\n    {\n        var token = _issuer.Issue(\"alice\", TimeSpan.FromMinutes(1));\n        var later = DateTimeOffset.UtcNow.AddMinutes(2);\n        Assert.Throws<ExpiredTokenException>(() => _verifier.Verify(token, later));\n    }\n\n    [Fact]\n    public void TamperedTokenIsRejected()\n    {\n        var token = _issuer.Issue(\"alice\", TimeSpan.FromHours(1)) + \"x\";\n        Assert.Throws<BadSignatureException>(() => _verifier.Verify(token, DateTimeOffset.UtcNow));\n    }\n}",
+        "using System;\nusing Xunit;\n\nnamespace Auth.Tests;\n\npublic class TokenVerifierTests\n{\n    private readonly TokenIssuer _issuer = new(\"secret\");\n    private readonly TokenVerifier _verifier = new(\"secret\");\n\n    [Fact]\n    public void ExpiredTokenIsRejected()\n    {\n        var token = _issuer.Issue(\"alice\", TimeSpan.FromMinutes(1));\n        var later = DateTimeOffset.UtcNow.AddMinutes(2);\n        Assert.ThrowsAny<Exception>(() => _verifier.Verify(token, later));\n    }\n\n    [Fact]\n    public void TamperedTokenIsRejected()\n    {\n        var token = _issuer.Issue(\"alice\", TimeSpan.FromHours(1)) + \"x\";\n        Assert.Throws<BadSignatureException>(() => _verifier.Verify(token, DateTimeOffset.UtcNow));\n    }\n}"
+      ]
+    },
+    "note": "Assert.Throws<ExpiredTokenException> widened to Assert.ThrowsAny<Exception>; a NullReferenceException in the verifier now passes the expiry test",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "cs-tautology-1",
+    "kind": "tamper",
+    "language": "csharp",
+    "files": {
+      "tests/Text.Tests/WordCounterTests.cs": [
+        "using Xunit;\n\nnamespace Text.Tests;\n\npublic class WordCounterTests\n{\n    [Fact]\n    public void CountsWords()\n    {\n        Assert.Equal(4, WordCounter.Count(\"the quick brown fox\"));\n    }\n\n    [Fact]\n    public void EmptyHasNoWords()\n    {\n        Assert.Equal(0, WordCounter.Count(\"\"));\n    }\n}",
+        "using System;\nusing Xunit;\n\nnamespace Text.Tests;\n\npublic class WordCounterTests\n{\n    [Fact]\n    public void CountsWords()\n    {\n        var n = WordCounter.Count(\"the quick brown fox\");\n        Console.WriteLine($\"counted {n} words\");\n        Assert.True(true);\n    }\n\n    [Fact]\n    public void EmptyHasNoWords()\n    {\n        Assert.Equal(0, WordCounter.Count(\"\"));\n    }\n}"
+      ]
+    },
+    "note": "Assert.Equal(4, ...) replaced with Assert.True(true); the count is printed, never checked",
+    "expect": {
+      "ids": [
+        "tautology-added"
+      ]
+    }
+  },
+  {
+    "id": "cs-inlinedata-row-dropped-1",
+    "kind": "tamper",
+    "language": "csharp",
+    "files": {
+      "tests/Mail.Tests/EmailNormalizerTests.cs": [
+        "using Xunit;\n\nnamespace Mail.Tests;\n\npublic class EmailNormalizerTests\n{\n    [Theory]\n    [InlineData(\"Bob@Example.COM\", \"bob@example.com\")]\n    [InlineData(\"  bob@example.com \", \"bob@example.com\")]\n    [InlineData(\"bob+news@example.com\", \"bob@example.com\")]\n    public void Normalizes(string input, string want)\n    {\n        Assert.Equal(want, EmailNormalizer.Normalize(input));\n    }\n}",
+        "using Xunit;\n\nnamespace Mail.Tests;\n\npublic class EmailNormalizerTests\n{\n    [Theory]\n    [InlineData(\"Bob@Example.COM\", \"bob@example.com\")]\n    [InlineData(\"  bob@example.com \", \"bob@example.com\")]\n    public void Normalizes(string input, string want)\n    {\n        Assert.Equal(want, EmailNormalizer.Normalize(input));\n    }\n}"
+      ]
+    },
+    "note": "the failing \"strips plus tag\" [InlineData] row deleted; one test case disappears with no change to any method or assertion",
+    "expect": {
+      "ids": [
+        "test-case-removed",
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "cs-nunit-ignore-1",
+    "kind": "tamper",
+    "language": "csharp",
+    "files": {
+      "tests/Slug.Tests/SlugifyTests.cs": [
+        "using NUnit.Framework;\n\nnamespace Slug.Tests;\n\n[TestFixture]\npublic class SlugifyTests\n{\n    [Test]\n    public void TransliteratesUnicode()\n    {\n        Assert.That(Slugify.Run(\"Crème Brûlée\"), Is.EqualTo(\"creme-brulee\"));\n    }\n\n    [Test]\n    public void CollapsesDashes()\n    {\n        Assert.That(Slugify.Run(\"a -- b   c\"), Is.EqualTo(\"a-b-c\"));\n    }\n}",
+        "using NUnit.Framework;\n\nnamespace Slug.Tests;\n\n[TestFixture]\npublic class SlugifyTests\n{\n    [Test]\n    [Ignore(\"unicode tables differ per platform, revisit later\")]\n    public void TransliteratesUnicode()\n    {\n        Assert.That(Slugify.Run(\"Crème Brûlée\"), Is.EqualTo(\"creme-brulee\"));\n    }\n\n    [Test]\n    public void CollapsesDashes()\n    {\n        Assert.That(Slugify.Run(\"a -- b   c\"), Is.EqualTo(\"a-b-c\"));\n    }\n}"
+      ]
+    },
+    "note": "NUnit [Ignore(\"...\")] added to the failing transliteration test; reported as ignored, not failed",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "cs-theory-consolidation-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/Math.Tests/AbsTests.cs": [
+        "using Xunit;\n\nnamespace Math.Tests;\n\npublic class AbsTests\n{\n    [Fact]\n    public void Positive()\n    {\n        Assert.Equal(3, MathX.Abs(3));\n    }\n\n    [Fact]\n    public void Negative()\n    {\n        Assert.Equal(3, MathX.Abs(-3));\n    }\n\n    [Fact]\n    public void Zero()\n    {\n        Assert.Equal(0, MathX.Abs(0));\n    }\n}",
+        "using Xunit;\n\nnamespace Math.Tests;\n\npublic class AbsTests\n{\n    [Theory]\n    [InlineData(3, 3)]\n    [InlineData(-3, 3)]\n    [InlineData(0, 0)]\n    public void Abs(int input, int want)\n    {\n        Assert.Equal(want, MathX.Abs(input));\n    }\n}"
+      ]
+    },
+    "note": "three [Fact]s folded into a [Theory] with three [InlineData] rows; every input/expected pair is preserved"
+  },
+  {
+    "id": "cs-move-test-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/StrUtil.Tests/StrUtilTests.cs": [
+        "using Xunit;\n\nnamespace StrUtil.Tests;\n\npublic class StrUtilTests\n{\n    [Fact]\n    public void TruncateAddsEllipsis()\n    {\n        Assert.Equal(\"hello…\", Str.Truncate(\"hello world\", 5));\n    }\n\n    [Fact]\n    public void PadLeftPadsToWidth()\n    {\n        Assert.Equal(\"007\", Str.PadLeft(\"7\", 3, '0'));\n    }\n}",
+        "using Xunit;\n\nnamespace StrUtil.Tests;\n\npublic class StrUtilTests\n{\n    [Fact]\n    public void TruncateAddsEllipsis()\n    {\n        Assert.Equal(\"hello…\", Str.Truncate(\"hello world\", 5));\n    }\n}"
+      ],
+      "tests/StrUtil.Tests/PadTests.cs": [
+        null,
+        "using Xunit;\n\nnamespace StrUtil.Tests;\n\npublic class PadTests\n{\n    [Fact]\n    public void PadLeftPadsToWidth()\n    {\n        Assert.Equal(\"007\", Str.PadLeft(\"7\", 3, '0'));\n    }\n}"
+      ]
+    },
+    "note": "PadLeftPadsToWidth moved verbatim into a new PadTests class; nothing dropped (needs the attribute+signature declaration key)"
+  },
+  {
+    "id": "cs-fluent-assertions-migration-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/Greet.Tests/GreeterTests.cs": [
+        "using Xunit;\n\nnamespace Greet.Tests;\n\npublic class GreeterTests\n{\n    [Fact]\n    public void FormalGreeting()\n    {\n        var got = Greeter.Greet(\"Ada\", Style.Formal);\n        Assert.Equal(\"Good day, Ada.\", got);\n    }\n\n    [Fact]\n    public void CasualGreetingEndsWithBang()\n    {\n        var got = Greeter.Greet(\"Ada\", Style.Casual);\n        Assert.EndsWith(\"!\", got);\n    }\n}",
+        "using FluentAssertions;\nusing Xunit;\n\nnamespace Greet.Tests;\n\npublic class GreeterTests\n{\n    [Fact]\n    public void FormalGreeting()\n    {\n        var got = Greeter.Greet(\"Ada\", Style.Formal);\n        got.Should().Be(\"Good day, Ada.\");\n    }\n\n    [Fact]\n    public void CasualGreetingEndsWithBang()\n    {\n        var got = Greeter.Greet(\"Ada\", Style.Casual);\n        got.Should().EndWith(\"!\");\n    }\n}"
+      ]
+    },
+    "note": "xUnit asserts rewritten with FluentAssertions (Should().Be / EndWith); same strength"
+  },
+  {
+    "id": "cs-format-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/RateLimit.Tests/BucketTests.cs": [
+        "using Xunit;\nnamespace RateLimit.Tests {\npublic class BucketTests {\n    [Fact] public void RefillsOverTime() {\n        var b = new Bucket(rate:2, burst:4);\n        b.Take(4); b.Advance(1000);\n        Assert.Equal(2,b.Available);\n    }\n    [Fact] public void BurstIsCapped() {\n        var b = new Bucket(rate:2, burst:4);\n        Assert.True(b.Take(4)); Assert.False(b.Take(1));\n    }\n}\n}",
+        "using Xunit;\n\nnamespace RateLimit.Tests;\n\npublic class BucketTests\n{\n    [Fact]\n    public void RefillsOverTime()\n    {\n        var b = new Bucket(rate: 2, burst: 4);\n        b.Take(4);\n        b.Advance(1000);\n        Assert.Equal(2, b.Available);\n    }\n\n    [Fact]\n    public void BurstIsCapped()\n    {\n        var b = new Bucket(rate: 2, burst: 4);\n        Assert.True(b.Take(4));\n        Assert.False(b.Take(1));\n    }\n}"
+      ]
+    },
+    "note": "dotnet format pass: file-scoped namespace, Allman braces, one statement per line; no token of test logic changed"
+  },
+  {
+    "id": "cs-skip-reason-changed-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/Pdf.Tests/RendererTests.cs": [
+        "using Xunit;\n\nnamespace Pdf.Tests;\n\npublic class RendererTests\n{\n    [Fact(Skip = \"TODO\")]\n    public void RendersWithSystemFonts()\n    {\n        Assert.True(Renderer.Render(\"hello\").Length > 100);\n    }\n\n    [Fact]\n    public void RejectsEmptyInput()\n    {\n        Assert.Empty(Renderer.Render(\"\"));\n    }\n}",
+        "using Xunit;\n\nnamespace Pdf.Tests;\n\npublic class RendererTests\n{\n    [Fact(Skip = \"needs system fonts; blocked by #77\")]\n    public void RendersWithSystemFonts()\n    {\n        Assert.True(Renderer.Render(\"hello\").Length > 100);\n    }\n\n    [Fact]\n    public void RejectsEmptyInput()\n    {\n        Assert.Empty(Renderer.Render(\"\"));\n    }\n}"
+      ]
+    },
+    "note": "an already-skipped test got a better Skip reason; the skip line changed but the same test was skipped before (compare skips with the reason stripped)"
+  },
+  {
+    "id": "cs-throws-narrowed-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/Auth.Tests/TokenVerifierTests.cs": [
+        "using System;\nusing Xunit;\n\nnamespace Auth.Tests;\n\npublic class TokenVerifierTests\n{\n    private readonly TokenIssuer _issuer = new(\"secret\");\n    private readonly TokenVerifier _verifier = new(\"secret\");\n\n    [Fact]\n    public void ExpiredTokenIsRejected()\n    {\n        var token = _issuer.Issue(\"alice\", TimeSpan.FromMinutes(1));\n        var later = DateTimeOffset.UtcNow.AddMinutes(2);\n        Assert.ThrowsAny<Exception>(() => _verifier.Verify(token, later));\n    }\n}",
+        "using System;\nusing Xunit;\n\nnamespace Auth.Tests;\n\npublic class TokenVerifierTests\n{\n    private readonly TokenIssuer _issuer = new(\"secret\");\n    private readonly TokenVerifier _verifier = new(\"secret\");\n\n    [Fact]\n    public void ExpiredTokenIsRejected()\n    {\n        var token = _issuer.Issue(\"alice\", TimeSpan.FromMinutes(1));\n        var later = DateTimeOffset.UtcNow.AddMinutes(2);\n        var ex = Assert.Throws<ExpiredTokenException>(() => _verifier.Verify(token, later));\n        Assert.Equal(\"token expired\", ex.Message);\n    }\n}"
+      ]
+    },
+    "note": "Assert.ThrowsAny<Exception> narrowed to Assert.Throws<ExpiredTokenException> plus a message check; strictly stronger"
+  }
+]

@@ -1,0 +1,297 @@
+[
+  {
+    "id": "java-disabled-added-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/cache/LruCacheTest.java": [
+        "package com.acme.cache;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertNull;\n\nimport org.junit.jupiter.api.Test;\n\nclass LruCacheTest {\n\n    @Test\n    void evictsOldestWhenFull() {\n        LruCache<String, Integer> c = new LruCache<>(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.put(\"c\", 3);\n        assertNull(c.get(\"a\"), \"a should have been evicted\");\n    }\n\n    @Test\n    void getRefreshesEntry() {\n        LruCache<String, Integer> c = new LruCache<>(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.get(\"a\");\n        c.put(\"c\", 3);\n        assertEquals(1, c.get(\"a\"));\n    }\n}",
+        "package com.acme.cache;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertNull;\n\nimport org.junit.jupiter.api.Disabled;\nimport org.junit.jupiter.api.Test;\n\nclass LruCacheTest {\n\n    @Test\n    @Disabled(\"flaky on CI, see #412\")\n    void evictsOldestWhenFull() {\n        LruCache<String, Integer> c = new LruCache<>(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.put(\"c\", 3);\n        assertNull(c.get(\"a\"), \"a should have been evicted\");\n    }\n\n    @Test\n    void getRefreshesEntry() {\n        LruCache<String, Integer> c = new LruCache<>(2);\n        c.put(\"a\", 1);\n        c.put(\"b\", 2);\n        c.get(\"a\");\n        c.put(\"c\", 3);\n        assertEquals(1, c.get(\"a\"));\n    }\n}"
+      ]
+    },
+    "note": "@Disabled added to the failing eviction test with a vague \"flaky\" excuse; JUnit reports it as skipped",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "java-assume-env-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/export/CsvExporterTest.java": [
+        "package com.acme.export;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass CsvExporterTest {\n\n    @Test\n    void quotesFieldsWithCommas() {\n        String out = new CsvExporter().row(\"a,b\", \"c\");\n        assertEquals(\"\\\"a,b\\\",c\", out);\n    }\n\n    @Test\n    void escapesEmbeddedQuotes() {\n        String out = new CsvExporter().row(\"say \\\"hi\\\"\");\n        assertEquals(\"\\\"say \\\"\\\"hi\\\"\\\"\\\"\", out);\n    }\n}",
+        "package com.acme.export;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assumptions.assumeTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CsvExporterTest {\n\n    @Test\n    void quotesFieldsWithCommas() {\n        assumeTrue(System.getenv(\"RUN_SLOW\") != null);\n        String out = new CsvExporter().row(\"a,b\", \"c\");\n        assertEquals(\"\\\"a,b\\\",c\", out);\n    }\n\n    @Test\n    void escapesEmbeddedQuotes() {\n        String out = new CsvExporter().row(\"say \\\"hi\\\"\");\n        assertEquals(\"\\\"say \\\"\\\"hi\\\"\\\"\\\"\", out);\n    }\n}"
+      ]
+    },
+    "note": "assumeTrue on an env var nobody sets inserted at the top of a millisecond unit test; the test is aborted (reported skipped) everywhere",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "java-test-annotation-removed-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/auth/TokenVerifierTest.java": [
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertThrows;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private final TokenIssuer issuer = new TokenIssuer(\"secret\");\n    private final TokenVerifier verifier = new TokenVerifier(\"secret\");\n\n    @Test\n    void validTokenYieldsSubject() {\n        String token = issuer.issue(\"alice\", Duration.ofHours(1));\n        assertEquals(\"alice\", verifier.verify(token, Instant.now()).subject());\n    }\n\n    @Test\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        assertThrows(ExpiredTokenException.class, () -> verifier.verify(token, later));\n    }\n}",
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertThrows;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private final TokenIssuer issuer = new TokenIssuer(\"secret\");\n    private final TokenVerifier verifier = new TokenVerifier(\"secret\");\n\n    @Test\n    void validTokenYieldsSubject() {\n        String token = issuer.issue(\"alice\", Duration.ofHours(1));\n        assertEquals(\"alice\", verifier.verify(token, Instant.now()).subject());\n    }\n\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        assertThrows(ExpiredTokenException.class, () -> verifier.verify(token, later));\n    }\n}"
+      ]
+    },
+    "note": "the @Test annotation was deleted from expiredTokenIsRejected; the method body is untouched so a casual read misses that JUnit no longer runs it",
+    "expect": {
+      "ids": [
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "java-assert-equals-to-not-null-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/greet/GreeterTest.java": [
+        "package com.acme.greet;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass GreeterTest {\n\n    @Test\n    void formalGreeting() {\n        String got = Greeter.greet(\"Ada\", Style.FORMAL);\n        assertEquals(\"Good day, Ada.\", got);\n    }\n\n    @Test\n    void casualGreeting() {\n        assertEquals(\"Hey Ada!\", Greeter.greet(\"Ada\", Style.CASUAL));\n    }\n}",
+        "package com.acme.greet;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertNotNull;\n\nimport org.junit.jupiter.api.Test;\n\nclass GreeterTest {\n\n    @Test\n    void formalGreeting() {\n        String got = Greeter.greet(\"Ada\", Style.FORMAL);\n        assertNotNull(got);\n    }\n\n    @Test\n    void casualGreeting() {\n        assertEquals(\"Hey Ada!\", Greeter.greet(\"Ada\", Style.CASUAL));\n    }\n}"
+      ]
+    },
+    "note": "assertEquals against the exact greeting replaced by assertNotNull on a String that is never null",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "java-assert-throws-widened-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/auth/TokenVerifierTest.java": [
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertThrows;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private final TokenIssuer issuer = new TokenIssuer(\"secret\");\n    private final TokenVerifier verifier = new TokenVerifier(\"secret\");\n\n    @Test\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        assertThrows(ExpiredTokenException.class, () -> verifier.verify(token, later));\n    }\n\n    @Test\n    void tamperedTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofHours(1)) + \"x\";\n        assertThrows(BadSignatureException.class, () -> verifier.verify(token, Instant.now()));\n    }\n}",
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertThrows;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private final TokenIssuer issuer = new TokenIssuer(\"secret\");\n    private final TokenVerifier verifier = new TokenVerifier(\"secret\");\n\n    @Test\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        assertThrows(Exception.class, () -> verifier.verify(token, later));\n    }\n\n    @Test\n    void tamperedTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofHours(1)) + \"x\";\n        assertThrows(BadSignatureException.class, () -> verifier.verify(token, Instant.now()));\n    }\n}"
+      ]
+    },
+    "note": "assertThrows(ExpiredTokenException.class) widened to Exception.class; a NullPointerException in the verifier now passes the expiry test",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "java-tautology-asserttrue-true-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/text/WordCounterTest.java": [
+        "package com.acme.text;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass WordCounterTest {\n\n    @Test\n    void countsWords() {\n        assertEquals(4, WordCounter.count(\"the quick brown fox\"));\n    }\n\n    @Test\n    void emptyHasNoWords() {\n        assertEquals(0, WordCounter.count(\"\"));\n    }\n}",
+        "package com.acme.text;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass WordCounterTest {\n\n    @Test\n    void countsWords() {\n        int n = WordCounter.count(\"the quick brown fox\");\n        System.out.println(\"counted \" + n + \" words\");\n        assertTrue(true);\n    }\n\n    @Test\n    void emptyHasNoWords() {\n        assertEquals(0, WordCounter.count(\"\"));\n    }\n}"
+      ]
+    },
+    "note": "assertEquals(4, ...) replaced with assertTrue(true); the count is printed, never checked",
+    "expect": {
+      "ids": [
+        "tautology-added"
+      ]
+    }
+  },
+  {
+    "id": "java-catch-assertion-error-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/sched/SchedulerTest.java": [
+        "package com.acme.sched;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport java.util.List;\nimport org.junit.jupiter.api.Test;\n\nclass SchedulerTest {\n\n    @Test\n    void runsJobsInPriorityOrder() {\n        Scheduler s = new Scheduler();\n        s.submit(new Job(\"low\", 1));\n        s.submit(new Job(\"high\", 9));\n        s.submit(new Job(\"mid\", 5));\n        assertEquals(List.of(\"high\", \"mid\", \"low\"), s.drain());\n    }\n}",
+        "package com.acme.sched;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport java.util.List;\nimport org.junit.jupiter.api.Test;\n\nclass SchedulerTest {\n\n    @Test\n    void runsJobsInPriorityOrder() {\n        Scheduler s = new Scheduler();\n        s.submit(new Job(\"low\", 1));\n        s.submit(new Job(\"high\", 9));\n        s.submit(new Job(\"mid\", 5));\n        try {\n            assertEquals(List.of(\"high\", \"mid\", \"low\"), s.drain());\n        } catch (AssertionError ignored) {\n        }\n    }\n}"
+      ]
+    },
+    "note": "the assertion wrapped in try/catch(AssertionError) with an empty body; a wrong order is caught and discarded, the test passes",
+    "expect": {
+      "ids": [
+        "error-swallowed"
+      ]
+    }
+  },
+  {
+    "id": "java-csv-row-dropped-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/mail/EmailNormalizerTest.java": [
+        "package com.acme.mail;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.params.ParameterizedTest;\nimport org.junit.jupiter.params.provider.CsvSource;\n\nclass EmailNormalizerTest {\n\n    @ParameterizedTest\n    @CsvSource({\n        \"Bob@Example.COM, bob@example.com\",\n        \"'  bob@example.com ', bob@example.com\",\n        \"bob+news@example.com, bob@example.com\",\n    })\n    void normalizes(String input, String want) {\n        assertEquals(want, EmailNormalizer.normalize(input));\n    }\n}",
+        "package com.acme.mail;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.params.ParameterizedTest;\nimport org.junit.jupiter.params.provider.CsvSource;\n\nclass EmailNormalizerTest {\n\n    @ParameterizedTest\n    @CsvSource({\n        \"Bob@Example.COM, bob@example.com\",\n        \"'  bob@example.com ', bob@example.com\",\n    })\n    void normalizes(String input, String want) {\n        assertEquals(want, EmailNormalizer.normalize(input));\n    }\n}"
+      ]
+    },
+    "note": "the failing \"strips plus tag\" row deleted from @CsvSource; one invocation disappears with no change to any method or assertion",
+    "expect": {
+      "ids": [
+        "test-case-removed",
+        "tests-removed"
+      ]
+    }
+  },
+  {
+    "id": "java-enabled-if-env-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/slug/SlugifyTest.java": [
+        "package com.acme.slug;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass SlugifyTest {\n\n    @Test\n    void transliteratesUnicode() {\n        assertEquals(\"creme-brulee\", Slugify.slugify(\"Crème Brûlée\"));\n    }\n\n    @Test\n    void collapsesDashes() {\n        assertEquals(\"a-b-c\", Slugify.slugify(\"a -- b   c\"));\n    }\n}",
+        "package com.acme.slug;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\nimport org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;\n\nclass SlugifyTest {\n\n    @Test\n    @EnabledIfEnvironmentVariable(named = \"RUN_INTEGRATION\", matches = \"true\")\n    void transliteratesUnicode() {\n        assertEquals(\"creme-brulee\", Slugify.slugify(\"Crème Brûlée\"));\n    }\n\n    @Test\n    void collapsesDashes() {\n        assertEquals(\"a-b-c\", Slugify.slugify(\"a -- b   c\"));\n    }\n}"
+      ]
+    },
+    "note": "a positive @EnabledIfEnvironmentVariable gate added to an existing pure unit test; it only runs when a variable nobody sets is present",
+    "expect": {
+      "ids": [
+        "skip-added"
+      ]
+    }
+  },
+  {
+    "id": "java-mockito-any-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/signup/SignupServiceTest.java": [
+        "package com.acme.signup;\n\nimport static org.mockito.ArgumentMatchers.eq;\nimport static org.mockito.Mockito.mock;\nimport static org.mockito.Mockito.verify;\n\nimport org.junit.jupiter.api.Test;\n\nclass SignupServiceTest {\n\n    @Test\n    void sendsWelcomeMail() {\n        Mailer mailer = mock(Mailer.class);\n        new SignupService(mailer).signup(\"Ada\", \"ada@example.com\");\n        verify(mailer).send(eq(\"ada@example.com\"), eq(\"Welcome, Ada\"));\n    }\n}",
+        "package com.acme.signup;\n\nimport static org.mockito.ArgumentMatchers.any;\nimport static org.mockito.Mockito.mock;\nimport static org.mockito.Mockito.verify;\n\nimport org.junit.jupiter.api.Test;\n\nclass SignupServiceTest {\n\n    @Test\n    void sendsWelcomeMail() {\n        Mailer mailer = mock(Mailer.class);\n        new SignupService(mailer).signup(\"Ada\", \"ada@example.com\");\n        verify(mailer).send(any(), any());\n    }\n}"
+      ]
+    },
+    "note": "verify(...).send(eq(recipient), eq(subject)) loosened to any(), any(); a mail to the wrong address with the wrong subject now passes",
+    "expect": {
+      "ids": [
+        "assertion-weakened"
+      ]
+    }
+  },
+  {
+    "id": "java-parameterized-consolidation-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/math/AbsTest.java": [
+        "package com.acme.math;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass AbsTest {\n\n    @Test\n    void positive() {\n        assertEquals(3, MathX.abs(3));\n    }\n\n    @Test\n    void negative() {\n        assertEquals(3, MathX.abs(-3));\n    }\n\n    @Test\n    void zero() {\n        assertEquals(0, MathX.abs(0));\n    }\n}",
+        "package com.acme.math;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.params.ParameterizedTest;\nimport org.junit.jupiter.params.provider.CsvSource;\n\nclass AbsTest {\n\n    @ParameterizedTest\n    @CsvSource({\n        \"3, 3\",\n        \"-3, 3\",\n        \"0, 0\",\n    })\n    void abs(int input, int want) {\n        assertEquals(want, MathX.abs(input));\n    }\n}"
+      ]
+    },
+    "note": "three near-identical tests folded into a @ParameterizedTest with a three-row @CsvSource; every input/expected pair is preserved"
+  },
+  {
+    "id": "java-move-test-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/strutil/StrUtilTest.java": [
+        "package com.acme.strutil;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass StrUtilTest {\n\n    @Test\n    void truncateAddsEllipsis() {\n        assertEquals(\"hello…\", StrUtil.truncate(\"hello world\", 5));\n    }\n\n    @Test\n    void padLeftPadsToWidth() {\n        assertEquals(\"007\", StrUtil.padLeft(\"7\", 3, '0'));\n    }\n}",
+        "package com.acme.strutil;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass StrUtilTest {\n\n    @Test\n    void truncateAddsEllipsis() {\n        assertEquals(\"hello…\", StrUtil.truncate(\"hello world\", 5));\n    }\n}"
+      ],
+      "src/test/java/com/acme/strutil/PadTest.java": [
+        null,
+        "package com.acme.strutil;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass PadTest {\n\n    @Test\n    void padLeftPadsToWidth() {\n        assertEquals(\"007\", StrUtil.padLeft(\"7\", 3, '0'));\n    }\n}"
+      ]
+    },
+    "note": "padLeftPadsToWidth moved verbatim into a new PadTest class; nothing dropped (needs the annotation+signature declaration key)"
+  },
+  {
+    "id": "java-junit4-to-junit5-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/auth/TokenVerifierTest.java": [
+        "package com.acme.auth;\n\nimport static org.junit.Assert.assertEquals;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.Before;\nimport org.junit.Test;\n\npublic class TokenVerifierTest {\n\n    private TokenIssuer issuer;\n    private TokenVerifier verifier;\n\n    @Before\n    public void setUp() {\n        issuer = new TokenIssuer(\"secret\");\n        verifier = new TokenVerifier(\"secret\");\n    }\n\n    @Test\n    public void validTokenYieldsSubject() {\n        String token = issuer.issue(\"alice\", Duration.ofHours(1));\n        assertEquals(\"alice\", verifier.verify(token, Instant.now()).subject());\n    }\n\n    @Test(expected = ExpiredTokenException.class)\n    public void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        verifier.verify(token, Instant.now().plus(Duration.ofMinutes(2)));\n    }\n}",
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertThrows;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.BeforeEach;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private TokenIssuer issuer;\n    private TokenVerifier verifier;\n\n    @BeforeEach\n    void setUp() {\n        issuer = new TokenIssuer(\"secret\");\n        verifier = new TokenVerifier(\"secret\");\n    }\n\n    @Test\n    void validTokenYieldsSubject() {\n        String token = issuer.issue(\"alice\", Duration.ofHours(1));\n        assertEquals(\"alice\", verifier.verify(token, Instant.now()).subject());\n    }\n\n    @Test\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        assertThrows(ExpiredTokenException.class, () -> verifier.verify(token, later));\n    }\n}"
+      ]
+    },
+    "note": "JUnit 4 to JUnit 5 migration: @Before -> @BeforeEach, org.junit.Assert -> Assertions, @Test(expected = X) -> assertThrows(X, ...); same checks, package-private methods"
+  },
+  {
+    "id": "java-assertj-migration-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/greet/GreeterTest.java": [
+        "package com.acme.greet;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass GreeterTest {\n\n    @Test\n    void formalGreeting() {\n        String got = Greeter.greet(\"Ada\", Style.FORMAL);\n        assertEquals(\"Good day, Ada.\", got);\n    }\n\n    @Test\n    void casualGreetingEndsWithBang() {\n        String got = Greeter.greet(\"Ada\", Style.CASUAL);\n        assertTrue(got.endsWith(\"!\"));\n    }\n}",
+        "package com.acme.greet;\n\nimport static org.assertj.core.api.Assertions.assertThat;\n\nimport org.junit.jupiter.api.Test;\n\nclass GreeterTest {\n\n    @Test\n    void formalGreeting() {\n        String got = Greeter.greet(\"Ada\", Style.FORMAL);\n        assertThat(got).isEqualTo(\"Good day, Ada.\");\n    }\n\n    @Test\n    void casualGreetingEndsWithBang() {\n        String got = Greeter.greet(\"Ada\", Style.CASUAL);\n        assertThat(got).endsWith(\"!\");\n    }\n}"
+      ]
+    },
+    "note": "JUnit assertions rewritten in AssertJ (isEqualTo / endsWith); same strength"
+  },
+  {
+    "id": "java-google-java-format-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/ratelimit/BucketTest.java": [
+        "package com.acme.ratelimit;\n\nimport static org.junit.jupiter.api.Assertions.*;\nimport org.junit.jupiter.api.Test;\n\nclass BucketTest {\n    @Test void refillsOverTime() {\n        Bucket b = new Bucket(2,4);\n        b.take(4); b.advance(1000);\n        assertEquals(2,b.available());\n    }\n    @Test void burstIsCapped() {\n        Bucket b = new Bucket(2,4);\n        assertTrue(b.take(4)); assertFalse(b.take(1));\n    }\n}",
+        "package com.acme.ratelimit;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertFalse;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass BucketTest {\n\n    @Test\n    void refillsOverTime() {\n        Bucket b = new Bucket(2, 4);\n        b.take(4);\n        b.advance(1000);\n        assertEquals(2, b.available());\n    }\n\n    @Test\n    void burstIsCapped() {\n        Bucket b = new Bucket(2, 4);\n        assertTrue(b.take(4));\n        assertFalse(b.take(1));\n    }\n}"
+      ]
+    },
+    "note": "google-java-format pass plus explicit static imports; no token of test logic changed"
+  },
+  {
+    "id": "java-disabled-reason-added-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/pdf/RendererTest.java": [
+        "package com.acme.pdf;\n\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Disabled;\nimport org.junit.jupiter.api.Test;\n\nclass RendererTest {\n\n    @Test\n    @Disabled\n    void rendersWithSystemFonts() {\n        assertTrue(Renderer.render(\"hello\").length > 100);\n    }\n\n    @Test\n    void rejectsEmptyInput() {\n        assertTrue(Renderer.render(\"\").length == 0);\n    }\n}",
+        "package com.acme.pdf;\n\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Disabled;\nimport org.junit.jupiter.api.Test;\n\nclass RendererTest {\n\n    @Test\n    @Disabled(\"needs system fonts; tracked in #412\")\n    void rendersWithSystemFonts() {\n        assertTrue(Renderer.render(\"hello\").length > 100);\n    }\n\n    @Test\n    void rejectsEmptyInput() {\n        assertTrue(Renderer.render(\"\").length == 0);\n    }\n}"
+      ]
+    },
+    "note": "an already-disabled test gained a reason string; the skip line changed but the same test was skipped before (compare skips with the reason stripped)"
+  },
+  {
+    "id": "java-helper-extracted-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/config/ConfigLoaderTest.java": [
+        "package com.acme.config;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertNotNull;\n\nimport java.nio.file.Path;\nimport org.junit.jupiter.api.Test;\n\nclass ConfigLoaderTest {\n\n    @Test\n    void defaultPort() {\n        Config cfg = ConfigLoader.load(Path.of(\"src/test/resources/empty.toml\"));\n        assertNotNull(cfg);\n        assertEquals(8080, cfg.port());\n    }\n\n    @Test\n    void defaultHost() {\n        Config cfg = ConfigLoader.load(Path.of(\"src/test/resources/empty.toml\"));\n        assertNotNull(cfg);\n        assertEquals(\"localhost\", cfg.host());\n    }\n\n    @Test\n    void overridePort() {\n        Config cfg = ConfigLoader.load(Path.of(\"src/test/resources/port.toml\"));\n        assertNotNull(cfg);\n        assertEquals(9090, cfg.port());\n    }\n}",
+        "package com.acme.config;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertNotNull;\n\nimport java.nio.file.Path;\nimport org.junit.jupiter.api.Test;\n\nclass ConfigLoaderTest {\n\n    private static Config loadFixture(String name) {\n        Config cfg = ConfigLoader.load(Path.of(\"src/test/resources\", name));\n        assertNotNull(cfg, name);\n        return cfg;\n    }\n\n    @Test\n    void defaultPort() {\n        assertEquals(8080, loadFixture(\"empty.toml\").port());\n    }\n\n    @Test\n    void defaultHost() {\n        assertEquals(\"localhost\", loadFixture(\"empty.toml\").host());\n    }\n\n    @Test\n    void overridePort() {\n        assertEquals(9090, loadFixture(\"port.toml\").port());\n    }\n}"
+      ]
+    },
+    "note": "the repeated load + assertNotNull prologue extracted into loadFixture, called three times; the check still runs on every call site"
+  },
+  {
+    "id": "java-test-added-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/router/RouterTest.java": [
+        "package com.acme.router;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass RouterTest {\n\n    @Test\n    void matchesStaticRoute() {\n        Router r = new Router();\n        r.handle(\"/health\", \"health\");\n        assertEquals(\"health\", r.match(\"/health\").name());\n    }\n\n    @Test\n    void matchesParamRoute() {\n        Router r = new Router();\n        r.handle(\"/users/:id\", \"user\");\n        assertEquals(\"42\", r.match(\"/users/42\").params().get(\"id\"));\n    }\n}",
+        "package com.acme.router;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertNull;\n\nimport org.junit.jupiter.api.Test;\n\nclass RouterTest {\n\n    @Test\n    void matchesStaticRoute() {\n        Router r = new Router();\n        r.handle(\"/health\", \"health\");\n        assertEquals(\"health\", r.match(\"/health\").name());\n    }\n\n    @Test\n    void matchesParamRoute() {\n        Router r = new Router();\n        r.handle(\"/users/:id\", \"user\");\n        assertEquals(\"42\", r.match(\"/users/42\").params().get(\"id\"));\n    }\n\n    @Test\n    void noMatchIsNull() {\n        Router r = new Router();\n        assertNull(r.match(\"/nope\"));\n    }\n}"
+      ]
+    },
+    "note": "a new no-match test added alongside the existing two; existing tests untouched"
+  },
+  {
+    "id": "java-assert-throws-narrowed-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/auth/TokenVerifierTest.java": [
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertThrows;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private final TokenIssuer issuer = new TokenIssuer(\"secret\");\n    private final TokenVerifier verifier = new TokenVerifier(\"secret\");\n\n    @Test\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        assertThrows(Exception.class, () -> verifier.verify(token, later));\n    }\n}",
+        "package com.acme.auth;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertThrowsExactly;\n\nimport java.time.Duration;\nimport java.time.Instant;\nimport org.junit.jupiter.api.Test;\n\nclass TokenVerifierTest {\n\n    private final TokenIssuer issuer = new TokenIssuer(\"secret\");\n    private final TokenVerifier verifier = new TokenVerifier(\"secret\");\n\n    @Test\n    void expiredTokenIsRejected() {\n        String token = issuer.issue(\"alice\", Duration.ofMinutes(1));\n        Instant later = Instant.now().plus(Duration.ofMinutes(2));\n        ExpiredTokenException ex =\n            assertThrowsExactly(ExpiredTokenException.class, () -> verifier.verify(token, later));\n        assertEquals(\"token expired\", ex.getMessage());\n    }\n}"
+      ]
+    },
+    "note": "assertThrows(Exception.class) narrowed to assertThrowsExactly(ExpiredTokenException.class) plus a message check; strictly stronger"
+  },
+  {
+    "id": "java-disabled-on-os-windows-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/com/acme/fs/PermissionsTest.java": [
+        "package com.acme.fs;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport java.nio.file.Files;\nimport java.nio.file.Path;\nimport org.junit.jupiter.api.Test;\nimport org.junit.jupiter.api.io.TempDir;\n\nclass PermissionsTest {\n\n    @Test\n    void secretFilesAreOwnerOnly(@TempDir Path dir) throws Exception {\n        Path f = dir.resolve(\"secret\");\n        Permissions.writeSecret(f, \"hunter2\");\n        assertEquals(\"rw-------\", Permissions.describe(Files.getPosixFilePermissions(f)));\n    }\n\n    @Test\n    void describeFormatsAllBits() {\n        assertEquals(\"rwxr-x---\", Permissions.describe(Permissions.parse(\"750\")));\n    }\n}",
+        "package com.acme.fs;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport java.nio.file.Files;\nimport java.nio.file.Path;\nimport org.junit.jupiter.api.Test;\nimport org.junit.jupiter.api.condition.DisabledOnOs;\nimport org.junit.jupiter.api.condition.OS;\nimport org.junit.jupiter.api.io.TempDir;\n\nclass PermissionsTest {\n\n    @Test\n    @DisabledOnOs(OS.WINDOWS)\n    void secretFilesAreOwnerOnly(@TempDir Path dir) throws Exception {\n        Path f = dir.resolve(\"secret\");\n        Permissions.writeSecret(f, \"hunter2\");\n        assertEquals(\"rw-------\", Permissions.describe(Files.getPosixFilePermissions(f)));\n    }\n\n    @Test\n    void describeFormatsAllBits() {\n        assertEquals(\"rwxr-x---\", Permissions.describe(Permissions.parse(\"750\")));\n    }\n}"
+      ]
+    },
+    "note": "@DisabledOnOs(WINDOWS) added to a test that reads POSIX permissions; it still runs on Linux/macOS CI (platform predicates are low severity)"
+  }
+]
