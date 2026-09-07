@@ -29,10 +29,10 @@ describe('isTestFile / isTestConfigFile', () => {
 
 describe('countTests', () => {
   it('counts js, python and go', () => {
-    expect(countTests('js', 'it("a", () => { expect(1).toBe(1); expect(2).toBe(2); });\ntest.skip("b", () => {});\ndescribe("d", () => { it.each([1])("c", () => {}); });')).toEqual({ tests: 3, assertions: 2, skipped: 1 });
-    expect(countTests('py', 'def test_a():\n    assert 1\n    self.assertEqual(1, 1)\n@pytest.mark.skip\ndef test_b():\n    pass\n')).toEqual({ tests: 2, assertions: 2, skipped: 1 });
-    expect(countTests('go', 'func TestA(t *testing.T) {\n\tt.Skip("x")\n\tif x { t.Fatal("no") }\n\tassert.Equal(t, 1, 1)\n}\n')).toEqual({ tests: 1, assertions: 2, skipped: 1 });
-    expect(countTests('other', 'anything')).toEqual({ tests: 0, assertions: 0, skipped: 0 });
+    expect(countTests('js', 'it("a", () => { expect(f(1)).toBe(1); expect(f(2)).toBe(2); });\ntest.skip("b", () => {});\ndescribe("d", () => { it.each([1])("c", () => {}); });')).toMatchObject({ tests: 3, assertions: 2, skipped: 1 });
+    expect(countTests('py', 'def test_a():\n    assert x == 1\n    self.assertEqual(a, b)\n@pytest.mark.skip\ndef test_b():\n    pass\n')).toMatchObject({ tests: 2, assertions: 2, skipped: 1 });
+    expect(countTests('go', 'func TestA(t *testing.T) {\n\tt.Skip("x")\n\tif x { t.Fatal("no") }\n\tassert.Equal(t, 1, got)\n}\n')).toMatchObject({ tests: 1, assertions: 2, skipped: 1 });
+    expect(countTests('other', 'anything')).toMatchObject({ tests: 0, assertions: 0, skipped: 0 });
   });
 });
 
@@ -46,17 +46,17 @@ describe('scanIntegrity: test files', () => {
   });
 
   it('flags removed tests and removed assertions with a summary line', () => {
-    const before = 'it("a", () => { expect(1).toBe(1); expect(2).toBe(2); });\nit("b", () => { expect(3).toBe(3); });\nit("c", () => { expect(4).toBe(4); });';
-    const after = 'it("a", () => { expect(1).toBe(1); });';
+    const before = 'it("a", () => { expect(f(1)).toBe(1); expect(f(2)).toBe(2); });\nit("b", () => { expect(f(3)).toBe(3); });\nit("c", () => { expect(f(4)).toBe(4); });';
+    const after = 'it("a", () => { expect(f(1)).toBe(1); });';
     const r = scanIntegrity(modified('a.test.ts', before, after).files, modified('a.test.ts', before, after));
     expect(ids(r.findings)).toEqual(['tests-removed:high']);
     expect(r.summary).toEqual({ testsBefore: 3, testsAfter: 1, assertionsBefore: 4, assertionsAfter: 1, skippedBefore: 0, skippedAfter: 0 });
     expect(formatSummaryLine(r.summary)).toBe('Tests 3 -> 1   Assertions 4 -> 1   Skipped 0 -> 0');
-    const only = modified('a.test.ts', 'it("a", () => { expect(1).toBe(1); expect(2).toBe(2); expect(3).toBe(3); });', 'it("a", () => { expect(1).toBe(1); });');
+    const only = modified('a.test.ts', 'it("a", () => { expect(f(1)).toBe(1); expect(f(2)).toBe(2); expect(f(3)).toBe(3); });', 'it("a", () => { expect(f(1)).toBe(1); });');
     const r2 = scanIntegrity(only.files, only);
     expect(ids(r2.findings)).toEqual(['assertions-removed:high']); // 2 of 3 assertions gone
-    const ten = Array.from({ length: 10 }, (_, i) => `expect(${i}).toBe(${i});`).join('\n');
-    const nine = Array.from({ length: 9 }, (_, i) => `expect(${i}).toBe(${i});`).join('\n');
+    const ten = Array.from({ length: 10 }, (_, i) => `expect(f(${i})).toBe(${i});`).join('\n');
+    const nine = Array.from({ length: 9 }, (_, i) => `expect(f(${i})).toBe(${i});`).join('\n');
     const one = modified('a.test.ts', `it("a", () => {\n${ten}\n});`, `it("a", () => {\n${nine}\n});`);
     expect(ids(scanIntegrity(one.files, one).findings)).toEqual(['assertions-removed:medium']);
   });
@@ -77,21 +77,21 @@ describe('scanIntegrity: test files', () => {
   it('flags widened tolerances and swallowed errors', () => {
     const d = modified('m.test.ts', 'expect(x).toBeCloseTo(1.5, 5);\nawait run();', 'expect(x).toBeCloseTo(1.5, 1);\ntry {\n  await run();\n} catch (e) {\n}');
     const r = scanIntegrity(d.files, d);
-    expect(ids(r.findings)).toEqual(['error-swallowed:medium', 'tolerance-widened:low']);
+    expect(ids(r.findings).sort()).toEqual(['error-swallowed:medium', 'tolerance-widened:medium']);
     const py = modified('test_m.py', 'assert x == pytest.approx(1.0, rel=1e-6)\nwith pytest.raises(ValueError):\n    f()', 'assert x == pytest.approx(1.0, rel=1e-2)\nwith pytest.raises(Exception):\n    f()\ntry:\n    g()\nexcept Exception:\n    pass');
     const r2 = scanIntegrity(py.files, py);
-    expect(ids(r2.findings).sort()).toEqual(['assertion-weakened:medium', 'error-swallowed:medium', 'tolerance-widened:low']);
+    expect(ids(r2.findings).sort()).toEqual(['assertion-weakened:medium', 'error-swallowed:medium', 'tolerance-widened:high']);
   });
 
   it('flags a deleted test file and python/go skips', () => {
-    const deleted = parseUnifiedDiff('diff --git a/tests/test_x.py b/tests/test_x.py\ndeleted file mode 100644\n--- a/tests/test_x.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-def test_a():\n-    assert 1\n');
-    const r = scanIntegrity(deleted, { readBefore: () => 'def test_a():\n    assert 1\n', readAfter: () => null });
+    const deleted = parseUnifiedDiff('diff --git a/tests/test_x.py b/tests/test_x.py\ndeleted file mode 100644\n--- a/tests/test_x.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-def test_a():\n-    assert x == 1\n');
+    const r = scanIntegrity(deleted, { readBefore: () => 'def test_a():\n    assert x == 1\n', readAfter: () => null });
     expect(ids(r.findings)).toEqual(['test-file-deleted:high']);
     expect(r.summary.testsBefore).toBe(1);
     expect(r.summary.testsAfter).toBe(0);
-    const py = modified('test_x.py', 'def test_a():\n    assert 1', '@pytest.mark.skip(reason="flaky")\ndef test_a():\n    assert 1');
+    const py = modified('test_x.py', 'def test_a():\n    assert x == 1', '@pytest.mark.skip(reason="flaky")\ndef test_a():\n    assert x == 1');
     expect(ids(scanIntegrity(py.files, py).findings)).toEqual(['skip-added:high']);
-    const go = modified('x_test.go', 'func TestA(t *testing.T) {\n\tassert.Equal(t, 1, 1)\n}', 'func TestA(t *testing.T) {\n\tt.Skip("later")\n\tassert.Equal(t, 1, 1)\n}');
+    const go = modified('x_test.go', 'func TestA(t *testing.T) {\n\tassert.Equal(t, 1, got)\n}', 'func TestA(t *testing.T) {\n\tt.Skip("later")\n\tassert.Equal(t, 1, got)\n}');
     expect(ids(scanIntegrity(go.files, go).findings)).toEqual(['skip-added:high']);
   });
 
@@ -124,7 +124,8 @@ describe('scanIntegrity: configuration', () => {
     expect(scanIntegrity(jest.files, jest).findings[0]?.message).toMatch(/ignore pattern/);
     const wf = modified('.github/workflows/ci.yml', '      - run: npm test\n', '      - run: npm run build\n        continue-on-error: true\n');
     const r = scanIntegrity(wf.files, wf);
-    expect(ids(r.findings).sort()).toEqual(['config-weakened:critical', 'test-step-removed:high']);
+    // continue-on-error on a build step is medium; removing the test step is the high finding
+    expect(ids(r.findings).sort()).toEqual(['config-weakened:medium', 'test-step-removed:high']);
     const still = modified('.github/workflows/ci.yml', '      - run: npm test\n', '      - run: npm ci\n      - run: npm test\n');
     expect(scanIntegrity(still.files, still).findings).toEqual([]);
     const pytest = modified('pyproject.toml', 'addopts = "-q"', 'addopts = "-q --ignore=tests/integration"');

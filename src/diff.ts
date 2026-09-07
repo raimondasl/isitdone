@@ -129,11 +129,13 @@ export function collectDiff(top: string, base = 'HEAD'): DiffResult {
   const hasHead = git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], top).ok;
   let files: DiffFile[] = [];
   if (hasHead) {
-    const d = git(['diff', '--no-color', '--no-ext-diff', '-U3', '-M', base, '--', '.', exclude], top);
+    // core.quotePath=false keeps non-ASCII paths readable instead of octal-escaped.
+    const d = git(['-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '-U3', '-M', base, '--', '.', exclude], top);
     if (!d.ok) return { files: [], base, error: `git diff failed: ${d.err}` };
     files = parseUnifiedDiff(d.out);
   }
-  const others = git(['ls-files', '-z', '--others', '--exclude-standard', '--', '.', exclude], top);
+  // Untracked files are new; with no commit yet, staged files are new too.
+  const others = git(['-c', 'core.quotePath=false', 'ls-files', '-z', '--others', '--exclude-standard', ...(hasHead ? [] : ['--cached']), '--', '.', exclude], top);
   if (others.ok) {
     for (const rel of others.out.split('\0').filter(Boolean)) {
       if (files.some((f) => f.path === rel)) continue;
