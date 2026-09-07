@@ -70,4 +70,6 @@ Add the GitHub Action to run the same verification on every pull request:
 npx isitdone uninstall
 ```
 
+On a pull request from a fork the default token is read-only, so the sticky comment is skipped; pass a `token` input with write access (a PAT or a GitHub App token) to comment there too. The `json` output is the path of the JSON result (`--json-file`).
+
 Docs: https://github.com/raimondasl/isitdone
