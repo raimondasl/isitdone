@@ -12,7 +12,8 @@ import { formatMarkdown, formatReport, toJson } from './report.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
 
-const NPX = `npx ${PACKAGE_NAME}`;
+/** Human-facing command. `isitdone` on npm is an alias of PACKAGE_NAME with the same bin. */
+const NPX = 'npx isitdone';
 
 const HELP = `isitdone ${VERSION} - don't let your coding agent say "done" until the checks actually pass.
 

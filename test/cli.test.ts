@@ -41,7 +41,7 @@ describe('cli end-to-end', () => {
     expect(cli(['--version'], process.cwd()).stdout.trim()).toBe('0.0.0-test');
     const h = cli(['--help'], process.cwd());
     expect(h.code).toBe(0);
-    expect(h.stdout).toMatch(/npx @aivolution\/isitdone init/);
+    expect(h.stdout).toMatch(/npx isitdone init/);
     expect(cli(['bogus'], process.cwd()).code).toBe(3);
     const unknown = cli(['--nope'], process.cwd());
     expect(unknown.code).toBe(3);

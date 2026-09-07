@@ -150,7 +150,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   // hooks
   const hooks = installedHooks(root);
   if (hooks.length === 0) {
-    checks.push({ name: 'hooks', ok: false, detail: 'no isitdone hook installed', hint: 'run `npx @aivolution/isitdone init` (add --agent codex|cursor|gemini|all for other hosts).' });
+    checks.push({ name: 'hooks', ok: false, detail: 'no isitdone hook installed', hint: 'run `npx isitdone init` (add --agent codex|cursor|gemini|all for other hosts).' });
   }
   const budget = budgetSeconds(detection.checks, config);
   for (const h of hooks) {
@@ -164,7 +164,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
       if (verdict.blocked) {
         checks.push({ name: `probe:${h.host.name}`, ok: true, detail: `synthetic "tests pass" stop was blocked in ${(probe.durationMs / 1000).toFixed(1)}s (${verdict.reason})` });
       } else if (probe.timedOut) {
-        checks.push({ name: `probe:${h.host.name}`, ok: false, detail: `hook did not answer within ${probeTimeout / 1000}s`, hint: 'first npx run downloads the package; run `npx -y @aivolution/isitdone --version` once, or `npm i -D @aivolution/isitdone` to make it local.' });
+        checks.push({ name: `probe:${h.host.name}`, ok: false, detail: `hook did not answer within ${probeTimeout / 1000}s`, hint: 'first npx run downloads the package; run `npx -y @aivolution/isitdone --version` once, or `npm i -D @aivolution/isitdone` so the hook resolves locally.' });
       } else {
         const tail = (probe.stderr || probe.stdout).trim().split('\n').slice(-3).join(' | ');
         checks.push({ name: `probe:${h.host.name}`, ok: false, detail: `hook did not block (${verdict.reason}; exit ${probe.exitCode ?? 'n/a'}) ${tail}`.trim(), hint: 'check that the command in the settings file runs from a shell in this directory.' });
