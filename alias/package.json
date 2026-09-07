@@ -1,0 +1,45 @@
+{
+  "name": "isitdone",
+  "version": "0.1.0",
+  "description": "Short name for @aivolution/isitdone: don't let your coding agent say \"done\" until the tests actually pass. `npx isitdone init` installs the Stop hook for Claude Code, Codex, Cursor and Gemini CLI.",
+  "type": "module",
+  "bin": {
+    "isitdone": "isitdone.js"
+  },
+  "files": [
+    "isitdone.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@aivolution/isitdone": "^0.1.0"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli",
+    "ai-agent",
+    "coding-agent",
+    "stop-hook",
+    "hooks",
+    "verification",
+    "tests"
+  ],
+  "author": "raimondasl <raimondas@hotmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raimondasl/isitdone.git",
+    "directory": "alias"
+  },
+  "homepage": "https://github.com/raimondasl/isitdone#readme",
+  "bugs": {
+    "url": "https://github.com/raimondasl/isitdone/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
