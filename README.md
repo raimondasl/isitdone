@@ -2,7 +2,7 @@
 
 **Don't let your coding agent say "done" until the tests actually pass.**
 
-`isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor and Gemini CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, and refuses the stop until they pass. Every run leaves a git-bound receipt you can paste into a PR.
+`isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor and Gemini CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, scans the diff for weakened tests, and refuses the stop until they pass. It also tells the agent mid-turn when an edit just weakened a test, runs the same verification on pull requests as a GitHub Action, and leaves a git-bound receipt you can paste into a PR.
 
 ```
 npx isitdone init
@@ -69,7 +69,7 @@ Edit one more file and the receipt goes **STALE** until the checks run again. A 
 
 ## How often does this actually happen?
 
-Measure it on your own machine. `isitdone history` reads the Claude Code transcripts already on disk (`~/.claude/projects`), finds every turn where the agent edited files and then claimed completion, and checks whether a test command actually passed after the last edit. Nothing leaves your machine; only counts are printed.
+Measure it on your own machine. `isitdone history` reads the Claude Code (`~/.claude/projects`) and Codex CLI (`~/.codex/sessions`, both the legacy and the paginated rollout formats) transcripts already on disk, finds every turn where the agent edited files and then claimed completion, and checks whether a test command actually passed after the last edit. Nothing leaves your machine; only counts are printed.
 
 ```
 $ npx isitdone history
@@ -98,7 +98,7 @@ One command per host. Run it inside the repository.
 | Gemini CLI | `npx isitdone init --agent gemini` | `.gemini/settings.json` (AfterAgent) |
 | Everything | `npx isitdone init --agent all` | all of the above |
 
-`init` detects the checks, writes the hook idempotently, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks:
+`init` detects the checks, writes the Stop hook and (for Claude Code, Codex and Gemini CLI) a warn-only post-edit hook, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks:
 
 ```
 $ npx isitdone init
@@ -135,11 +135,44 @@ npx isitdone update --check  # only reports whether a newer release exists
 
 `doctor` reports the version the hook actually runs and mentions when a newer release is available. Projects that installed `@aivolution/isitdone` as a dev dependency update it with `npm update @aivolution/isitdone` instead.
 
+## Mid-turn warnings
+
+The Stop hook is the gate; the post-edit hook is the nudge. On Claude Code, Codex and Gemini CLI, `init` also registers a hook that runs after every `Edit`/`Write` (Codex: `apply_patch`, Gemini: `write_file`/`replace`). It scans just that file against `HEAD` and, when the edit weakened a test, adds a short factual note next to the tool result:
+
+```
+isitdone: your edit to src/auth.test.ts weakened the tests (Tests 4 -> 4   Assertions 6 -> 4   Skipped 0 -> 1):
+  - line 12: test skipped or marked expected-failure [high]
+  - line 30: assertion weakened: toEqual -> existence check [medium]
+If this is intentional, say so to the user and explain why; otherwise restore the tests. The Stop hook will run the full checks before you can finish.
+```
+
+It never blocks and it is fast (one file, no test run). Cursor has no channel an agent can see after an edit, so there the warning arrives with the Stop hook instead. Skip it with `init --no-edit-hook`.
+
+## GitHub Action
+
+The same verification on every pull request, from a clean checkout that never trusts a local receipt:
+
+```yaml
+on: { pull_request: {} }
+permissions:
+  contents: read
+  pull-requests: write      # for the sticky PR comment
+jobs:
+  isitdone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # exact merge-base for the test-integrity diff
+      - uses: raimondasl/isitdone@v0
+```
+
+It runs the repo's checks, scans the diff against the PR base for weakened tests (strict by default: high/critical findings fail the job even when the checks pass), writes the receipt to the job summary, keeps one updated comment on the PR, and can upload the findings as SARIF (`with: { sarif: 'true' }`, needs `security-events: write` on push events). On pull requests from forks the token is read-only, so the comment is skipped and the job summary carries the receipt. Inputs: `version`, `base`, `strict`, `comment`, `sarif`, `token`, `args`; outputs: `status`, `report`, `json`.
+
 ## How it decides
 
 1. **Detect.** Reads `package.json` scripts (`test`, `typecheck`, `lint`, `build`; npm, pnpm, yarn, bun, deno), `pyproject.toml`/`pytest.ini`/`requirements.txt` (pytest, ruff, flake8, mypy, pyright; uv/poetry/pipenv runners), `go.mod` (`go vet`, `go test ./...`), `Cargo.toml` (`cargo check`, `cargo test`), .NET solutions, Gradle/Maven, and `Makefile` targets. Anything can be overridden in `.isitdone.json`.
 2. **Gate on the claim.** The default `claim-gated` profile runs the fast *lite* checks (typecheck, lint) on every stop, and the *full* checks (tests, build) only when the agent's final message contains a completion claim: "tests pass", "done", "implemented", "verified", "ready for review", and so on. A question or a progress update does not trigger a two-minute test run. Hosts that do not pass the final message (Cursor) get the full profile, cached per tree.
-3. **Cache per tree.** The working tree (tracked changes *and* untracked files) is hashed with a temporary git index. A PASS receipt for the same tree hash and the same check configuration is reused; nothing runs twice for nothing.
+3. **Cache per tree.** The working tree (tracked changes *and* untracked files, including the contents of submodules and embedded repositories) is hashed with a temporary git index, without writing any blob into `.git/objects`. A PASS receipt for the same tree hash and the same check configuration is reused; nothing runs twice for nothing.
 4. **Run and decide.** Checks run in a fresh subprocess with `CI=true`, per-check timeouts, and the last 30 lines captured. If anything fails, the hook returns the host's block shape with a bounded, plain-text reason quoting the claim and the failing output. If everything passes, the receipt is written and the agent may stop.
 5. **Scan the diff for weakened tests.** Deleted test files, new `.skip`/`.only`/`xfail`, dropped assertions, matchers downgraded (`toStrictEqual` to `toEqual`, `toThrow("msg")` to `toThrow()`, `assertEqual` to `assertTrue`), widened tolerances, empty `catch`/`except: pass`, and neutered configuration (`|| true`, `--passWithNoTests`, `continue-on-error`, `testPathIgnorePatterns`, removed CI test steps). JS/TS, Python and Go. Findings are reported with a before/after line (`Tests 47 -> 44   Assertions 112 -> 104   Skipped 0 -> 1`) and recorded in the receipt; with `"integrity": "strict"` (or `--strict`) high/critical findings block the stop even when the checks pass. Suppress a line with `// isitdone: allow <reason>`; suppressions are reported, never hidden, and `--ci` treats new ones as findings.
 6. **Never loop forever.** The hook honours each host's `stop_hook_active` / `loop_count`, counts its own attempts per session (default cap 3), and after the cap lets the agent stop with a visible warning. Malformed stdin, a broken config, or an internal error always allow the stop: `isitdone` must never brick the agent.
@@ -155,6 +188,7 @@ npx isitdone --all                keep running tests even if typecheck failed
 npx isitdone --strict             block when the change weakened tests (high/critical findings)
 npx isitdone --ci                 strict, plus new "isitdone: allow" suppressions count as findings
 npx isitdone --base main          scan the diff against a branch instead of HEAD (pull requests)
+npx isitdone --report out.md      write a markdown report; --sarif out.sarif writes SARIF 2.1.0 for code scanning
 npx isitdone history [--since 30d] [--exclude <substr>] [--verbose] [--min <pct>]
                                   share of past "done" claims backed by a passing test run
 npx isitdone receipt [--md|--json] state of the current tree: PASS | FAIL | STALE | NONE (exit 0 only on full PASS)
@@ -195,7 +229,7 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 
 - **Not a lie detector.** It does not grade the agent's sentences; it runs commands and reads exit codes. The claim only decides *how much* to run.
 - **Not adversarial security.** The receipt is HMAC-signed so a hand-edited file reads NONE, and the tree hash makes a stale receipt visible, but an agent with permission to edit settings can remove the hook. `isitdone` guards honest mistakes, which is where nearly all "tests pass" fiction comes from.
-- **Not an AST.** The test-integrity scan is line-and-regex over the diff with a small, published detector list. It catches the common ways an agent makes red go green without fixing anything; it will miss clever ones and occasionally flag a legitimate refactor, which is why it warns by default and every finding shows its evidence.
+- **Not an AST.** The test-integrity scan is line-and-regex over the diff with a small, published detector list. It catches the common ways an agent makes red go green without fixing anything; it will miss clever ones (a test's expected value bent to match a regression, for one) and occasionally flag a legitimate refactor, which is why it warns by default and every finding shows its evidence. Its precision and recall are measured on a labelled corpus in [`bench/`](bench/) (`npm run bench`; 117 hand-labelled cases at the time of writing, 100% precision, 98% recall) that grows with every reported mistake.
 - **Not an LLM.** Nothing here calls a model, phones home, or needs a key.
 
 ## Related tools
@@ -210,7 +244,7 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 
 ## Roadmap
 
-- **v0.3** Warn-only PostToolUse / afterFileEdit hook on test-file edits (mid-turn feedback); a GitHub Action that re-runs the checks and posts the receipt on the PR; submodule contents in the tree hash; Codex transcripts in `history`; a labelled corpus with published precision/recall per detector.
+- **v0.4** Windsurf, OpenCode and Copilot CLI adapters; `history` for Cursor and Gemini transcripts; a `--related` mode that runs only the tests touching the changed files for slow suites; Rust and Java test-integrity detectors.
 
 ## Development
 
@@ -218,11 +252,12 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 npm ci
 npm test            # vitest, runs in a throwaway HOME so it never touches your real agent settings
 npm run typecheck
-npm run build       # esbuild -> dist/isitdone.js, single file, no dependencies
+npm run build       # esbuild -> dist/isitdone.js (CLI) and dist/index.js (library), no dependencies
+npm run bench       # precision/recall of the test-integrity scanner over bench/cases/
 node dist/isitdone.js
 ```
 
-The repository dogfoods itself: CI runs `node dist/isitdone.js --json` on every push.
+The repository dogfoods itself: CI runs `node dist/isitdone.js --json` on every push, and pull requests run the GitHub Action. The library is importable too: `import { verify, scanIntegrity } from '@aivolution/isitdone'`.
 
 ## License
 

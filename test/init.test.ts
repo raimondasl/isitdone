@@ -18,7 +18,7 @@ describe('init', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }) } });
     const path = join(repo.root, '.claude', 'settings.json');
     repo.write('.claude/settings.json', JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo hi' }] }] } }));
-    const first = init({ root: repo.root, hosts: ['claude'], scope: 'project' });
+    const first = init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project' });
     expect(first.map((r) => [r.host, r.action])).toEqual([['claude', 'added']]);
     const s = read(path);
     expect(s.permissions).toEqual({ allow: ['Bash(npm test)'] });
@@ -26,10 +26,10 @@ describe('init', () => {
     const stop = (s.hooks as Record<string, unknown[]>).Stop as Array<{ hooks: Array<{ command: string; timeout: number; type: string }> }>;
     expect(stop).toHaveLength(1);
     expect(stop[0]?.hooks[0]).toEqual({ type: 'command', command: 'npx -y @aivolution/isitdone hook --host claude', timeout: 600 });
-    const again = init({ root: repo.root, hosts: ['claude'], scope: 'project' });
+    const again = init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project' });
     expect(again[0]?.action).toBe('unchanged');
     expect(((read(path).hooks as Record<string, unknown[]>).Stop as unknown[]).length).toBe(1);
-    const updated = init({ root: repo.root, hosts: ['claude'], scope: 'project', timeout: 120 });
+    const updated = init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project', timeout: 120 });
     expect(updated[0]?.action).toBe('updated');
     expect(((read(path).hooks as Record<string, unknown[]>).Stop as Array<{ hooks: Array<{ timeout: number }> }>)[0]?.hooks[0]?.timeout).toBe(120);
     expect(installedHooks(repo.root).map((h) => h.host.name)).toEqual(['claude']);
@@ -39,24 +39,24 @@ describe('init', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }) } });
     const path = join(repo.root, '.claude', 'settings.json');
     repo.write('.claude/settings.json', JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo other' }] }] } }));
-    init({ root: repo.root, hosts: ['claude'], scope: 'project' });
-    const removed = init({ root: repo.root, hosts: ['claude'], scope: 'project', remove: true });
+    init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project' });
+    const removed = init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project', remove: true });
     expect(removed[0]?.action).toBe('removed');
     const s = read(path);
     expect(JSON.stringify(s)).not.toContain('isitdone');
     expect(JSON.stringify(s)).toContain('echo other');
-    expect(init({ root: repo.root, hosts: ['claude'], scope: 'project', remove: true })[0]?.action).toBe('absent');
+    expect(init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project', remove: true })[0]?.action).toBe('absent');
     // removing the last hook drops the empty hooks object entirely
     repo.write('.claude/settings.json', JSON.stringify({ theme: 'dark' }));
-    init({ root: repo.root, hosts: ['claude'], scope: 'project' });
-    init({ root: repo.root, hosts: ['claude'], scope: 'project', remove: true });
+    init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project' });
+    init({ editHook: false, root: repo.root, hosts: ['claude'], scope: 'project', remove: true });
     expect(read(path)).toEqual({ theme: 'dark' });
   });
 
   it('writes host-specific shapes for codex, cursor and gemini', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }) } });
     const root = repo.root;
-    const results = init({ root, hosts: ['codex', 'cursor', 'gemini'], scope: 'project', timeout: 120 });
+    const results = init({ editHook: false, root, hosts: ['codex', 'cursor', 'gemini'], scope: 'project', timeout: 120 });
     expect(results.map((r) => r.action)).toEqual(['added', 'added', 'added']);
 
     const codex = read(join(repo.root, '.codex', 'hooks.json'));
@@ -70,8 +70,8 @@ describe('init', () => {
 
     expect(installedHooks(root).map((h) => h.host.name)).toEqual(['codex', 'cursor', 'gemini']);
     for (const name of ['codex', 'cursor', 'gemini'] as const) {
-      expect(init({ root, hosts: [name], scope: 'project', timeout: 120 })[0]?.action).toBe('unchanged');
-      expect(init({ root, hosts: [name], scope: 'project', remove: true })[0]?.action).toBe('removed');
+      expect(init({ editHook: false, root, hosts: [name], scope: 'project', timeout: 120 })[0]?.action).toBe('unchanged');
+      expect(init({ editHook: false, root, hosts: [name], scope: 'project', remove: true })[0]?.action).toBe('removed');
     }
     expect(installedHooks(root)).toEqual([]);
   });
@@ -81,13 +81,13 @@ describe('init', () => {
     // A user-level Codex dir must NOT be picked up by auto mode.
     const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
     mkdirSync(join(home, '.codex'), { recursive: true });
-    const none = init({ root: repo.root, hosts: 'auto', scope: 'project' });
+    const none = init({ editHook: false, root: repo.root, hosts: 'auto', scope: 'project' });
     expect(none.map((r) => [r.host, r.scope])).toEqual([['claude', 'project']]);
     expect(existsSync(join(home, '.codex', 'hooks.json'))).toBe(false);
 
     const withCodex = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }), '.codex/config.toml': '' } });
     try {
-      const r = init({ root: withCodex.root, hosts: 'auto', scope: 'project' });
+      const r = init({ editHook: false, root: withCodex.root, hosts: 'auto', scope: 'project' });
       expect(r.map((x) => [x.host, x.scope])).toEqual([['codex', 'project']]);
     } finally {
       withCodex.cleanup();
@@ -98,7 +98,7 @@ describe('init', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }) } });
     const path = join(repo.root, '.codex', 'hooks.json');
     repo.write('.codex/hooks.json', String.fromCharCode(0xfeff) + '{"hooks":{}}');
-    const r = init({ root: repo.root, hosts: ['codex'], scope: 'project', command: (h) => `node /abs/cli.js hook --host ${h.name}` });
+    const r = init({ editHook: false, root: repo.root, hosts: ['codex'], scope: 'project', command: (h) => `node /abs/cli.js hook --host ${h.name}` });
     expect(r[0]?.command).toBe('node /abs/cli.js hook --host codex');
     const text = readFileSync(path, 'utf8');
     expect(text.charCodeAt(0)).not.toBe(0xfeff);
@@ -109,7 +109,7 @@ describe('init', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }) } });
     const root = repo.root;
     repo.write('.claude/settings.json', '{ broken');
-    expect(() => init({ root, hosts: ['claude'], scope: 'project' })).toThrow(/not valid JSON/);
+    expect(() => init({ editHook: false, root, hosts: ['claude'], scope: 'project' })).toThrow(/not valid JSON/);
     expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe('{ broken');
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "isitdone",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Short name for @aivolution/isitdone: don't let your coding agent say \"done\" until the tests actually pass. `npx isitdone init` installs the Stop hook for Claude Code, Codex, Cursor and Gemini CLI.",
   "type": "module",
   "bin": {

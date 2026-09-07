@@ -5,13 +5,13 @@ import { toSarif } from './sarif.js';
 import { detectChecks } from './detect.js';
 import { doctor } from './doctor.js';
 import { findRoot, gitInfo } from './git.js';
-import { readStdin, runHook } from './hook.js';
+import { readStdin, runEditHook, runHook } from './hook.js';
 import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
 import { formatDuration, styleFor } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
-import { formatMarkdown, formatReport, integrityBlocks, toJson } from './report.js';
+import { formatMarkdown, formatReport, formatReportMarkdown, integrityBlocks, toJson } from './report.js';
 import { isNewer, runUpdate } from './update.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
@@ -42,6 +42,7 @@ Options for run
   --strict                block when the change weakened tests (high/critical findings)
   --ci                    strict, and new "isitdone: allow" suppressions count as findings
   --sarif <file>          also write the integrity findings as SARIF 2.1.0 (GitHub code scanning)
+  --report <file>         also write a markdown report (job summaries, PR comments)
 
 Options for history
   --since <30d|2w|2026-01-01>   only sessions after this point
@@ -57,6 +58,7 @@ Options for init
   --timeout <seconds>     hook timeout (default: sized to the detected checks, at least 600)
   --command "<cmd>"       hook command to register (default: npx -y ${PACKAGE_NAME} hook --host <name>)
   --remove                uninstall the hook(s)
+  --no-edit-hook          only the Stop hook; skip the warn-only hook that runs after each test-file edit
   --no-doctor             skip the post-install doctor run
   --json                  machine-readable output
 
@@ -78,8 +80,8 @@ interface Args {
   rest: string[];
 }
 
-const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file']);
-const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest']);
+const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file', 'report']);
+const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
 
@@ -170,6 +172,9 @@ async function cmdRun(args: Args): Promise<number> {
   const state = res.receipt ? (res.receipt.status === 'PASS' ? 'PASS' : 'FAIL') : res.cached ? 'PASS' : 'NONE';
   if (typeof args.flags.sarif === 'string' && res.integrity) {
     writeFileSync(resolve(args.flags.sarif), JSON.stringify(toSarif(res.integrity, { base: typeof args.flags.base === 'string' ? args.flags.base : 'HEAD' }), null, 2) + '\n');
+  }
+  if (typeof args.flags.report === 'string') {
+    writeFileSync(resolve(args.flags.report), formatReportMarkdown(res, state) + '\n');
   }
   if (json) out(JSON.stringify(toJson(res, state), null, 2));
   else out(formatReport(res, s));
@@ -299,6 +304,13 @@ async function cmdHook(args: Args): Promise<number> {
     return 3;
   }
   const stdin = await readStdin();
+  if (args.flags.event === 'edit') {
+    // Warn-only: never blocks, never fails the tool call.
+    const o = runEditHook({ host, stdin, cwd: typeof args.flags.cwd === 'string' ? resolve(args.flags.cwd) : process.cwd() });
+    if (process.env.ISITDONE_DEBUG) err(`isitdone edit hook: ${o.why}`);
+    if (o.stdout !== '') process.stdout.write(o.stdout + '\n');
+    return 0;
+  }
   const profile = args.flags.profile;
   const outcome = await runHook({
     host,
@@ -346,6 +358,7 @@ async function cmdInit(args: Args): Promise<number> {
       timeout,
       remove,
       command: command ? () => command : undefined,
+      editHook: args.flags['edit-hook'] !== false,
     });
   } catch (e) {
     err(`isitdone init: ${(e as Error).message}`);
@@ -372,7 +385,7 @@ async function cmdInit(args: Args): Promise<number> {
   }
   for (const r of results) {
     const verb = r.action === 'added' ? s.green('added') : r.action === 'updated' ? s.cyan('updated') : r.action === 'removed' ? s.yellow('removed') : s.dim(r.action);
-    out(`  ${r.displayName.padEnd(12)}${verb.padEnd(r.action.length + 10)} ${s.dim(`${r.path}${r.action === 'added' || r.action === 'updated' ? ` (timeout ${r.timeout}s)` : ''}`)}`);
+    out(`  ${r.displayName.padEnd(12)}${verb.padEnd(r.action.length + 10)} ${s.dim(`${r.hostEvent.padEnd(12)} ${r.path}${r.action === 'added' || r.action === 'updated' ? ` (timeout ${r.timeout}s)` : ''}`)}`);
   }
   const notes = results.filter((r) => r.note && r.action !== 'removed' && r.action !== 'absent');
   for (const r of notes) out(`  ${s.dim('note:')} ${r.note}`);

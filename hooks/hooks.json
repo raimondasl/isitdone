@@ -10,6 +10,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y @aivolution/isitdone hook --host claude --event edit",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

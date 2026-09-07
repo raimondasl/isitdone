@@ -4,6 +4,23 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-07
+
+### Added
+
+- Warn-only post-edit hook (`hook --host <name> --event edit`): after every file edit on Claude Code (`PostToolUse`, `Edit|Write|MultiEdit`), Codex (`PostToolUse`, `apply_patch` patch text parsed for file names) and Gemini CLI (`AfterTool`, `write_file|replace`), the edited test or configuration file is scanned against HEAD and a short factual note is added to the agent's context when the edit weakened a test. Never blocks. `init` registers it next to the Stop hook (`--no-edit-hook` to skip); Cursor has no agent-visible channel after an edit and keeps the Stop-hook scan only.
+- GitHub Action (`uses: raimondasl/isitdone@v0`): runs the checks and the test-integrity scan against the PR merge-base from a clean checkout (never trusts a receipt), writes the receipt to the job summary, keeps one updated PR comment (skipped gracefully on fork PRs or without `pull-requests: write`), optional SARIF upload, strict by default.
+- `isitdone history` reads Codex CLI rollouts (`$CODEX_HOME/sessions` in the dated and flat layouts, `archived_sessions`, zstd-compressed files where Node can decompress them), both the legacy and the paginated history modes; reports per agent.
+- Submodules and embedded repositories are part of the working-tree hash, so edits inside them invalidate receipts.
+- `--report <file>` (markdown report) and `--sarif <file>` (SARIF 2.1.0) on `run`.
+- `bench/`: a labelled corpus of 117 legitimate refactors and tampering cases with `npm run bench` printing precision and recall per language; new detectors it demanded (dropped table rows, constant assertion targets, `expect.assertions(0)`, plain `assert x == v` downgrades, unittest first-argument subjects, returns behind an `if`, docstring openers, multi-line ignore lists, JSON-escaped `-t` quotes).
+- Programmatic API: `import { verify, scanIntegrity, checkEditedFile, toSarif } from '@aivolution/isitdone'` (`dist/index.js`).
+
+### Changed
+
+- The block reason ends with `[isitdone x.y.z]` (used by `doctor` to report the running hook version).
+- `continue-on-error` on a CI step that does not run tests is low, not critical.
+
 ## [0.2.1] - 2026-09-07
 
 ### Added

@@ -198,6 +198,60 @@ export function formatMarkdown(receipt: Receipt, state: string): string {
   return lines.join('\n');
 }
 
+/** Full markdown report for CI: verdict, checks, integrity findings, tree. */
+export function formatReportMarkdown(res: VerifyResult, state: string): string {
+  const lines: string[] = [];
+  const failed = res.ran.filter((r) => r.status !== 'PASS');
+  const blocked = integrityBlocks(res);
+  const verdict = res.ok && !blocked ? 'DONE' : 'NOT DONE';
+  const why = !res.ok ? `${failed.length} check${failed.length === 1 ? '' : 's'} failed` : blocked ? `checks pass, but ${res.integrity?.blocking.length} test-integrity finding${res.integrity?.blocking.length === 1 ? '' : 's'} block${res.integrity?.blocking.length === 1 ? 's' : ''}` : res.detection.checks.length === 0 ? 'no checks detected' : `${res.ran.length || res.receipt?.checks.length || 0} checks passed`;
+  lines.push(`**${verdict}** (${why})`);
+  lines.push('');
+  const checks = res.cached && res.receipt ? res.receipt.checks : res.ran;
+  if (checks.length > 0) {
+    lines.push('| check | result | time |');
+    lines.push('|---|---|---|');
+    for (const r of checks) {
+      const d = detail(r);
+      lines.push(`| \`${mdCell(r.cmd)}\` | ${statusWord(r)}${d ? ` (${mdCell(d)})` : ''} | ${formatDuration(r.durationMs)} |`);
+    }
+    for (const sk of res.skipped) lines.push(`| \`${mdCell(sk.check.cmd)}\` | SKIP (${mdCell(sk.reason)}) | |`);
+    lines.push('');
+  } else if (res.detection.checks.length === 0) {
+    lines.push('No checks detected: add a test script to `package.json` or define checks in `.isitdone.json`.');
+    lines.push('');
+  }
+  for (const r of failed) {
+    lines.push(`<details><summary><code>${mdCell(r.cmd)}</code> output (last ${Math.min(r.tail.length, 30)} lines)</summary>`);
+    lines.push('');
+    lines.push('```');
+    for (const l of r.tail.slice(-30)) lines.push(l.replace(/```/g, "'''"));
+    lines.push('```');
+    lines.push('');
+    lines.push('</details>');
+    lines.push('');
+  }
+  const it = res.integrity;
+  if (it && (it.testFiles > 0 || it.findings.length > 0)) {
+    lines.push(`**Test integrity** (${formatSummaryLine(it.summary)}${res.integrityMode === 'strict' ? ', strict' : ''})`);
+    lines.push('');
+    if (it.findings.length === 0) lines.push(`${it.testFiles} test file${it.testFiles === 1 ? '' : 's'} changed, nothing weakened.`);
+    else {
+      lines.push('| where | finding | severity |');
+      lines.push('|---|---|---|');
+      for (const f of it.findings.slice(0, 40)) lines.push(`| \`${mdCell(f.file)}${f.line ? ':' + f.line : ''}\` | ${mdCell(f.message)}${f.suppressed ? ` (allowed: ${mdCell(f.suppressed)})` : ''} | ${f.severity} |`);
+      if (it.findings.length > 40) lines.push(`| | ... ${it.findings.length - 40} more | |`);
+    }
+    lines.push('');
+  }
+  for (const w of res.warnings) lines.push(`> warning: ${w}`);
+  if (res.warnings.length) lines.push('');
+  const g = res.git;
+  const tree = g.tree.slice(0, 7);
+  lines.push(`<sub>Tree ${tree}${g.head ? ` on ${g.branch ?? 'detached'}@${g.head.slice(0, 7)}` : ''}${g.dirtyFiles ? ` (+${g.dirtyFiles} uncommitted)` : ''} · receipt ${state} · isitdone ${VERSION}</sub>`);
+  return lines.join('\n');
+}
+
 /** Stable machine-readable summary. */
 export function toJson(res: VerifyResult, state: string): Record<string, unknown> {
   const checks = res.cached && res.receipt ? res.receipt.checks : res.ran;

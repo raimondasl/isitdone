@@ -1,6 +1,6 @@
 /**
- * Host adapters: how each coding agent registers a Stop hook, what it sends on stdin,
- * and how it expects "block" / "allow" to be expressed.
+ * Host adapters: how each coding agent registers a Stop hook (and a warn-only post-edit hook), what it sends on
+ * stdin, and how it expects "block" / "allow" / "warn" to be expressed.
  *
  * Verified against the vendor docs on 2026-09-07:
  *  - Claude Code: https://code.claude.com/docs/en/hooks
@@ -37,6 +37,29 @@ export interface HookInput {
   hookEventName: string | null;
 }
 
+/** Normalised view of a post-edit hook payload. */
+export interface EditInput {
+  /** Files the tool touched (absolute or relative to cwd). */
+  files: string[];
+  cwd: string | null;
+  toolName: string | null;
+}
+
+/** Warn-only hook after the agent edits a file. Null when the host has no channel the agent can see. */
+export interface EditSupport {
+  event: string;
+  matcher: string;
+  register(settings: Record<string, unknown>, command: string, timeoutSeconds: number): boolean;
+  registered(settings: Record<string, unknown>): string | null;
+  unregister(settings: Record<string, unknown>): boolean;
+  parse(raw: Record<string, unknown>): EditInput;
+  /** stdout that adds `text` to the agent's context without blocking. */
+  warn(text: string): string;
+  /** stdout that says nothing. */
+  silent(): string;
+  synthetic(root: string, file: string): Record<string, unknown>;
+}
+
 export interface HostAdapter {
   name: HostName;
   displayName: string;
@@ -60,6 +83,7 @@ export interface HostAdapter {
   postInstallNote: string | null;
   /** Build a realistic synthetic payload for doctor. */
   synthetic(root: string, message: string): Record<string, unknown>;
+  edit: EditSupport | null;
 }
 
 /** Recognise our own hook command whether it is `npx isitdone hook`, `node .../isitdone.js hook`, or a custom wrapper. */
@@ -67,6 +91,11 @@ export const HOOK_MARKER = /\bisitdone\b[^\n]*\bhook\b/;
 
 export function isOurCommand(v: unknown): v is string {
   return typeof v === 'string' && HOOK_MARKER.test(v);
+}
+
+/** Is this one of our commands for the edit event (vs the stop event)? */
+export function isEditCommand(v: unknown): boolean {
+  return isOurCommand(v) && /--event[=\s]+edit\b/.test(v);
 }
 
 function str(v: unknown): string | null {
@@ -95,8 +124,15 @@ function pickRoot(roots: unknown[]): string | null {
   return inside ?? (list[0] as string);
 }
 
-/** Claude Code / Codex share the `hooks.<Event>[].hooks[]` shape. */
-function registerClaudeStyle(settings: Record<string, unknown>, event: string, command: string, timeout: number, extra: Record<string, unknown> = {}): boolean {
+/** Files named in a Codex apply_patch document. */
+export function patchPaths(patch: string): string[] {
+  const out: string[] = [];
+  for (const m of patch.matchAll(/^\s*\*\*\* (?:Update File|Add File|Delete File|Move to): (.+?)\s*$/gm)) out.push(m[1] as string);
+  return [...new Set(out)];
+}
+
+/** Claude Code / Codex / Gemini share the `hooks.<Event>[].hooks[]` shape. */
+function registerClaudeStyle(settings: Record<string, unknown>, event: string, command: string, timeout: number, opts: { matcher?: string; extra?: Record<string, unknown>; isMine: (v: unknown) => boolean }): boolean {
   const hooks = (settings.hooks = obj(settings.hooks) ?? {});
   const groups = (hooks[event] = arr(hooks[event]));
   for (const g of groups) {
@@ -104,29 +140,30 @@ function registerClaudeStyle(settings: Record<string, unknown>, event: string, c
     if (!go) continue;
     for (const h of arr(go.hooks)) {
       const ho = obj(h);
-      if (ho && isOurCommand(ho.command)) {
-        if (ho.command === command && ho.timeout === timeout) return false;
+      if (ho && opts.isMine(ho.command)) {
+        if (ho.command === command && ho.timeout === timeout && (opts.matcher === undefined || go.matcher === opts.matcher)) return false;
         ho.command = command;
         ho.timeout = timeout;
+        if (opts.matcher !== undefined) go.matcher = opts.matcher;
         return true;
       }
     }
   }
-  groups.push({ hooks: [{ type: 'command', command, timeout, ...extra }] });
+  groups.push({ ...(opts.matcher !== undefined ? { matcher: opts.matcher } : {}), hooks: [{ type: 'command', command, timeout, ...(opts.extra ?? {}) }] });
   return true;
 }
 
-function registeredClaudeStyle(settings: Record<string, unknown>, event: string): string | null {
+function registeredClaudeStyle(settings: Record<string, unknown>, event: string, isMine: (v: unknown) => boolean): string | null {
   for (const g of arr(obj(settings.hooks)?.[event])) {
     for (const h of arr(obj(g)?.hooks)) {
       const cmd = obj(h)?.command;
-      if (isOurCommand(cmd)) return cmd;
+      if (isMine(cmd)) return cmd as string;
     }
   }
   return null;
 }
 
-function unregisterClaudeStyle(settings: Record<string, unknown>, event: string): boolean {
+function unregisterClaudeStyle(settings: Record<string, unknown>, event: string, isMine: (v: unknown) => boolean): boolean {
   const hooks = obj(settings.hooks);
   if (!hooks) return false;
   const groups = arr(hooks[event]);
@@ -135,7 +172,7 @@ function unregisterClaudeStyle(settings: Record<string, unknown>, event: string)
     const go = obj(g);
     if (!go) return true;
     const before = arr(go.hooks).length;
-    go.hooks = arr(go.hooks).filter((h) => !isOurCommand(obj(h)?.command));
+    go.hooks = arr(go.hooks).filter((h) => !isMine(obj(h)?.command));
     if ((go.hooks as unknown[]).length !== before) changed = true;
     return (go.hooks as unknown[]).length > 0;
   });
@@ -144,6 +181,27 @@ function unregisterClaudeStyle(settings: Record<string, unknown>, event: string)
   else hooks[event] = kept;
   if (Object.keys(hooks).length === 0) delete settings.hooks;
   return changed;
+}
+
+const isStop = (v: unknown) => isOurCommand(v) && !isEditCommand(v);
+
+function additionalContext(eventName: string, text: string): string {
+  return JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: text } });
+}
+
+function editFiles(raw: Record<string, unknown>): string[] {
+  const input = obj(raw.tool_input) ?? {};
+  const files: string[] = [];
+  for (const k of ['file_path', 'notebook_path', 'path']) {
+    const v = str(input[k]);
+    if (v) files.push(v);
+  }
+  if (typeof input.command === 'string' && /\*\*\* (?:Begin Patch|Update File|Add File)/.test(input.command)) files.push(...patchPaths(input.command));
+  for (const e of arr(input.edits)) {
+    const p = str(obj(e)?.file_path);
+    if (p) files.push(p);
+  }
+  return [...new Set(files)];
 }
 
 const claude: HostAdapter = {
@@ -166,9 +224,9 @@ const claude: HostAdapter = {
   }),
   allow: (systemMessage) => (systemMessage ? JSON.stringify({ systemMessage }) : ''),
   block: (reason) => JSON.stringify({ decision: 'block', reason }),
-  register: (s, command, timeout) => registerClaudeStyle(s, 'Stop', command, timeout),
-  registered: (s) => registeredClaudeStyle(s, 'Stop'),
-  unregister: (s) => unregisterClaudeStyle(s, 'Stop'),
+  register: (s, command, timeout) => registerClaudeStyle(s, 'Stop', command, timeout, { isMine: isStop }),
+  registered: (s) => registeredClaudeStyle(s, 'Stop', isStop),
+  unregister: (s) => unregisterClaudeStyle(s, 'Stop', isStop),
   postInstallNote: 'Claude Code reloads settings automatically; if the hook does not show in /hooks within a few seconds, restart the session.',
   synthetic: (root, message) => ({
     session_id: 'isitdone-doctor',
@@ -180,6 +238,17 @@ const claude: HostAdapter = {
     last_assistant_message: message,
     background_tasks: [],
   }),
+  edit: {
+    event: 'PostToolUse',
+    matcher: 'Edit|Write|MultiEdit',
+    register: (s, command, timeout) => registerClaudeStyle(s, 'PostToolUse', command, timeout, { matcher: 'Edit|Write|MultiEdit', isMine: isEditCommand }),
+    registered: (s) => registeredClaudeStyle(s, 'PostToolUse', isEditCommand),
+    unregister: (s) => unregisterClaudeStyle(s, 'PostToolUse', isEditCommand),
+    parse: (raw) => ({ files: editFiles(raw), cwd: str(raw.cwd) ?? pickRoot(arr(raw.workspace_roots)), toolName: str(raw.tool_name) }),
+    warn: (text) => additionalContext('PostToolUse', text),
+    silent: () => '',
+    synthetic: (root, file) => ({ session_id: 'isitdone-doctor', cwd: root, hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: join(root, file), old_string: 'a', new_string: 'b' }, tool_response: { filePath: join(root, file), success: true }, tool_use_id: 'doctor' }),
+  },
 };
 
 const codex: HostAdapter = {
@@ -202,10 +271,10 @@ const codex: HostAdapter = {
   // Codex validates output strictly (no extra keys) and prefers empty stdout for "allow".
   allow: (systemMessage) => (systemMessage ? JSON.stringify({ systemMessage }) : ''),
   block: (reason) => JSON.stringify({ decision: 'block', reason }),
-  register: (s, command, timeout) => registerClaudeStyle(s, 'Stop', command, timeout),
-  registered: (s) => registeredClaudeStyle(s, 'Stop'),
-  unregister: (s) => unregisterClaudeStyle(s, 'Stop'),
-  postInstallNote: 'Codex requires you to trust new hooks: open Codex in this repo and run /hooks, then trust the isitdone entry. Re-trust after any change to the command.',
+  register: (s, command, timeout) => registerClaudeStyle(s, 'Stop', command, timeout, { isMine: isStop }),
+  registered: (s) => registeredClaudeStyle(s, 'Stop', isStop),
+  unregister: (s) => unregisterClaudeStyle(s, 'Stop', isStop),
+  postInstallNote: 'Codex requires you to trust new hooks: open Codex in this repo and run /hooks, then trust the isitdone entries. Re-trust after any change to the commands.',
   synthetic: (root, message) => ({
     session_id: 'isitdone-doctor',
     turn_id: 'turn-1',
@@ -217,6 +286,18 @@ const codex: HostAdapter = {
     stop_hook_active: false,
     last_assistant_message: message,
   }),
+  edit: {
+    event: 'PostToolUse',
+    matcher: 'Edit|Write',
+    register: (s, command, timeout) => registerClaudeStyle(s, 'PostToolUse', command, timeout, { matcher: 'Edit|Write', isMine: isEditCommand }),
+    registered: (s) => registeredClaudeStyle(s, 'PostToolUse', isEditCommand),
+    unregister: (s) => unregisterClaudeStyle(s, 'PostToolUse', isEditCommand),
+    // apply_patch reports tool_input.command = the patch text; file names come from its *** headers.
+    parse: (raw) => ({ files: editFiles(raw), cwd: str(raw.cwd), toolName: str(raw.tool_name) }),
+    warn: (text) => additionalContext('PostToolUse', text),
+    silent: () => '',
+    synthetic: (root, file) => ({ session_id: 'isitdone-doctor', turn_id: 'turn-1', transcript_path: null, cwd: root, hook_event_name: 'PostToolUse', model: 'doctor', permission_mode: 'default', tool_name: 'apply_patch', tool_use_id: 'doctor', tool_input: { command: `*** Begin Patch\n*** Update File: ${file}\n@@\n-a\n+b\n*** End Patch\n` }, tool_response: `Success. Updated the following files:\nM ${file}\n` }),
+  },
 };
 
 const cursor: HostAdapter = {
@@ -245,7 +326,7 @@ const cursor: HostAdapter = {
     const list = (hooks.stop = arr(hooks.stop));
     for (const h of list) {
       const ho = obj(h);
-      if (ho && isOurCommand(ho.command)) {
+      if (ho && isStop(ho.command)) {
         if (ho.command === command && ho.timeout === timeout) return false;
         ho.command = command;
         ho.timeout = timeout;
@@ -260,7 +341,7 @@ const cursor: HostAdapter = {
   registered: (s) => {
     for (const h of arr(obj(s.hooks)?.stop)) {
       const cmd = obj(h)?.command;
-      if (isOurCommand(cmd)) return cmd;
+      if (isStop(cmd)) return cmd as string;
     }
     return null;
   },
@@ -268,14 +349,14 @@ const cursor: HostAdapter = {
     const hooks = obj(s.hooks);
     if (!hooks) return false;
     const list = arr(hooks.stop);
-    const kept = list.filter((h) => !isOurCommand(obj(h)?.command));
+    const kept = list.filter((h) => !isStop(obj(h)?.command));
     if (kept.length === list.length) return false;
     if (kept.length === 0) delete hooks.stop;
     else hooks.stop = kept;
     return true;
   },
   postInstallNote:
-    'Cursor runs project hooks only in trusted workspaces; check the Hooks tab under Customize. Cursor does not pass the final message to stop hooks, so isitdone runs the full profile there (cached per tree). If "Include third-party Plugins, Skills, and other configs" is enabled, Cursor also runs hooks from .claude/settings.json: keep only one registration to avoid running the checks twice.',
+    'Cursor runs project hooks only in trusted workspaces; check the Hooks tab under Customize. Cursor does not pass the final message to stop hooks, so isitdone runs the full profile there (cached per tree), and it has no agent-visible channel after a file edit, so the test-integrity warnings arrive with the Stop hook. If "Include third-party Plugins, Skills, and other configs" is enabled, Cursor also runs hooks from .claude/settings.json: keep only one registration to avoid running the checks twice.',
   synthetic: (root, message) => ({
     conversation_id: 'isitdone-doctor',
     generation_id: 'gen-1',
@@ -289,6 +370,7 @@ const cursor: HostAdapter = {
     loop_count: 0,
     last_assistant_message: message,
   }),
+  edit: null,
 };
 
 const gemini: HostAdapter = {
@@ -310,27 +392,10 @@ const gemini: HostAdapter = {
   }),
   allow: (systemMessage) => JSON.stringify(systemMessage ? { decision: 'allow', systemMessage } : {}),
   block: (reason) => JSON.stringify({ decision: 'deny', reason }),
-  register: (s, command, timeout) => {
-    // Gemini timeouts are milliseconds.
-    const ms = timeout * 1000;
-    const hooks = (s.hooks = obj(s.hooks) ?? {});
-    const groups = (hooks.AfterAgent = arr(hooks.AfterAgent));
-    for (const g of groups) {
-      for (const h of arr(obj(g)?.hooks)) {
-        const ho = obj(h);
-        if (ho && isOurCommand(ho.command)) {
-          if (ho.command === command && ho.timeout === ms) return false;
-          ho.command = command;
-          ho.timeout = ms;
-          return true;
-        }
-      }
-    }
-    groups.push({ matcher: '*', hooks: [{ name: 'isitdone', type: 'command', command, timeout: ms }] });
-    return true;
-  },
-  registered: (s) => registeredClaudeStyle(s, 'AfterAgent'),
-  unregister: (s) => unregisterClaudeStyle(s, 'AfterAgent'),
+  // Gemini timeouts are milliseconds.
+  register: (s, command, timeout) => registerClaudeStyle(s, 'AfterAgent', command, timeout * 1000, { matcher: '*', extra: { name: 'isitdone' }, isMine: isStop }),
+  registered: (s) => registeredClaudeStyle(s, 'AfterAgent', isStop),
+  unregister: (s) => unregisterClaudeStyle(s, 'AfterAgent', isStop),
   postInstallNote: 'Gemini CLI prints a warning the first time it sees a project hook, then runs it. The folder must be trusted. Use /hooks panel to inspect.',
   synthetic: (root, message) => ({
     session_id: 'isitdone-doctor',
@@ -342,6 +407,17 @@ const gemini: HostAdapter = {
     prompt_response: message,
     stop_hook_active: false,
   }),
+  edit: {
+    event: 'AfterTool',
+    matcher: 'write_file|replace',
+    register: (s, command, timeout) => registerClaudeStyle(s, 'AfterTool', command, timeout * 1000, { matcher: 'write_file|replace', extra: { name: 'isitdone-edit' }, isMine: isEditCommand }),
+    registered: (s) => registeredClaudeStyle(s, 'AfterTool', isEditCommand),
+    unregister: (s) => unregisterClaudeStyle(s, 'AfterTool', isEditCommand),
+    parse: (raw) => ({ files: editFiles(raw), cwd: str(raw.cwd), toolName: str(raw.tool_name) }),
+    warn: (text) => additionalContext('AfterTool', text),
+    silent: () => '{}',
+    synthetic: (root, file) => ({ session_id: 'isitdone-doctor', cwd: root, hook_event_name: 'AfterTool', timestamp: new Date().toISOString(), tool_name: 'replace', tool_input: { file_path: join(root, file), old_string: 'a', new_string: 'b' }, tool_response: { llmContent: 'Successfully modified file', returnDisplay: {} } }),
+  },
 };
 
 export const HOSTS: Record<HostName, HostAdapter> = { claude, codex, cursor, gemini };

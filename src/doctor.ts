@@ -153,11 +153,15 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
 
   // hooks
   const hooks = installedHooks(root);
-  if (hooks.length === 0) {
+  if (!hooks.some((h) => h.event === 'stop')) {
     checks.push({ name: 'hooks', ok: false, detail: 'no isitdone hook installed', hint: 'run `npx isitdone init` (add --agent codex|cursor|gemini|all for other hosts).' });
   }
   const budget = budgetSeconds(detection.checks, config);
   for (const h of hooks) {
+    if (h.event === 'edit') {
+      checks.push({ name: `edit-hook:${h.host.name}`, ok: true, detail: `${h.host.displayName} ${h.host.edit?.event ?? ''} (${h.scope}) -> ${h.command}` });
+      continue;
+    }
     checks.push({ name: `hook:${h.host.name}`, ok: true, detail: `${h.host.displayName} (${h.scope}) ${h.path} -> ${h.command}` });
     if (h.timeout !== null && budget > h.timeout) {
       checks.push({ name: `timeout:${h.host.name}`, ok: false, detail: `hook timeout ${h.timeout}s is smaller than the worst case of the checks (${budget}s)`, hint: 'a hook that overruns is cancelled by the host and the stop is allowed; re-run `init` to resize it, or lower the check timeouts.' });

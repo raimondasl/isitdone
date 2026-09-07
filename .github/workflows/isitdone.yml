@@ -1,0 +1,28 @@
+name: isitdone
+
+# The judge is judged: every pull request to isitdone runs the isitdone GitHub Action from this checkout,
+# using the CLI built from the PR itself rather than the published package.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  isitdone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: ./
+        with:
+          command: node dist/isitdone.js

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { findClaim } from './claims.js';
 import { loadConfig, type IsitdoneConfig } from './config.js';
 import { detectChecks } from './detect.js';
+import { checkEditedFile } from './editcheck.js';
 import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
 import { findRoot, RECEIPT_DIR } from './git.js';
 import { getHost, type HookInput, type HostAdapter } from './hosts.js';
@@ -244,6 +245,40 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     result,
     attempts,
   };
+}
+
+export interface EditHookOutcome {
+  stdout: string;
+  why: string;
+  notes: string[];
+}
+
+/**
+ * Warn-only hook after the agent edits a file: scan the touched test/config files and hand the agent a short note.
+ * Never blocks, never fails; exit code is always 0.
+ */
+export function runEditHook(opts: { host: string; stdin: string; cwd?: string; env?: NodeJS.ProcessEnv }): EditHookOutcome {
+  const host = getHost(opts.host);
+  const env = opts.env ?? process.env;
+  if (!host.edit) return { stdout: '', why: `${host.displayName} has no agent-visible channel after an edit`, notes: [] };
+  const silent = (why: string): EditHookOutcome => ({ stdout: host.edit ? host.edit.silent() : '', why, notes: [] });
+  if (env.ISITDONE === '1') return silent('nested inside an isitdone check');
+  const raw = parsePayload(opts.stdin);
+  if (!raw) return silent('stdin was not a JSON object');
+  const input = host.edit.parse(raw);
+  if (input.files.length === 0) return silent('no file path in the payload');
+  const cwd = input.cwd && existsSync(input.cwd) ? input.cwd : (opts.cwd ?? process.cwd());
+  const notes: string[] = [];
+  for (const file of input.files.slice(0, 8)) {
+    try {
+      const r = checkEditedFile(cwd, file);
+      if (r?.note) notes.push(r.note);
+    } catch {
+      // a scan problem must never disturb the agent's tool call
+    }
+  }
+  if (notes.length === 0) return silent(`nothing weakened in ${input.files.length} file(s)`);
+  return { stdout: host.edit.warn(notes.join('\n\n')), why: `${notes.length} note(s)`, notes };
 }
 
 export function readStdin(timeoutMs = 3000): Promise<string> {

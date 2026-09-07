@@ -1,0 +1,157 @@
+name: 'isitdone'
+description: "Verify the change is really done: run the repo's own tests/typecheck/lint, scan the diff for weakened tests, post the receipt as a job summary and a sticky PR comment, optionally upload SARIF."
+author: 'raimondasl'
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  version:
+    description: 'isitdone version to run via npx (an exact version, a range, or "latest")'
+    required: false
+    default: 'latest'
+  base:
+    description: 'Base branch to diff against for the test-integrity scan (defaults to the PR base branch)'
+    required: false
+    default: ${{ github.base_ref }}
+  strict:
+    description: 'Fail the job when the change weakened tests (high/critical findings), even if the checks pass'
+    required: false
+    default: 'true'
+  comment:
+    description: 'Create or update a sticky PR comment with the receipt (needs pull-requests: write; skipped on fork PRs)'
+    required: false
+    default: 'true'
+  sarif:
+    description: 'Upload the integrity findings as SARIF to code scanning (needs security-events: write on push events)'
+    required: false
+    default: 'false'
+  token:
+    description: 'Token used for the PR comment'
+    required: false
+    default: ${{ github.token }}
+  args:
+    description: 'Extra isitdone CLI arguments'
+    required: false
+    default: ''
+  command:
+    description: 'Command that runs the isitdone CLI (default: npx --yes @aivolution/isitdone@<version>); e.g. "node dist/isitdone.js" to test a checkout'
+    required: false
+    default: ''
+
+outputs:
+  status:
+    description: 'pass | fail'
+    value: ${{ steps.run.outputs.status }}
+  report:
+    description: 'Path to the markdown report'
+    value: ${{ steps.run.outputs.report }}
+  json:
+    description: 'Path to the JSON result'
+    value: ${{ steps.run.outputs.json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve the base commit for the diff
+      id: base
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base }}
+        EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        EVENT_BEFORE: ${{ github.event.before }}
+      run: |
+        set +e
+        BASE_SHA=""
+        if [ -n "$BASE_REF" ]; then
+          git fetch --no-tags --prune origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1
+          BASE_SHA=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null)
+          if [ -z "$BASE_SHA" ]; then
+            echo "::warning::Shallow clone: use actions/checkout with fetch-depth: 0 for an exact merge-base. Falling back to the event base sha."
+            if [ -n "$EVENT_BASE_SHA" ]; then
+              git fetch --no-tags --depth=1 origin "$EVENT_BASE_SHA" >/dev/null 2>&1
+              BASE_SHA="$EVENT_BASE_SHA"
+            else
+              BASE_SHA=$(git rev-parse "origin/${BASE_REF}" 2>/dev/null)
+            fi
+          fi
+        elif [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+          git fetch --no-tags --depth=1 origin "$EVENT_BEFORE" >/dev/null 2>&1
+          BASE_SHA="$EVENT_BEFORE"
+        fi
+        if [ -z "$BASE_SHA" ]; then
+          BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
+        fi
+        echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+        echo "isitdone: diffing against $BASE_SHA"
+
+    - name: Run isitdone
+      id: run
+      shell: bash
+      env:
+        ISITDONE_VERSION: ${{ inputs.version }}
+        ISITDONE_COMMAND: ${{ inputs.command }}
+        BASE_SHA: ${{ steps.base.outputs.sha }}
+        STRICT: ${{ inputs.strict }}
+        EXTRA_ARGS: ${{ inputs.args }}
+      run: |
+        set +e
+        MODE=""
+        if [ "$STRICT" = "true" ]; then MODE="--ci"; fi
+        CMD="${ISITDONE_COMMAND:-npx --yes @aivolution/isitdone@${ISITDONE_VERSION}}"
+        # A CI run never trusts a receipt from somewhere else.
+        $CMD --no-cache $MODE --base "$BASE_SHA" \
+          --report "$RUNNER_TEMP/isitdone.md" --sarif "$RUNNER_TEMP/isitdone.sarif" $EXTRA_ARGS
+        code=$?
+        set -e
+        [ -f "$RUNNER_TEMP/isitdone.md" ] || echo "isitdone produced no report (exit $code)" > "$RUNNER_TEMP/isitdone.md"
+        [ -f "$RUNNER_TEMP/isitdone.sarif" ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "$RUNNER_TEMP/isitdone.sarif"
+        echo "report=$RUNNER_TEMP/isitdone.md" >> "$GITHUB_OUTPUT"
+        echo "json=$RUNNER_TEMP/isitdone.json" >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        echo "status=$([ "$code" -eq 0 ] && echo pass || echo fail)" >> "$GITHUB_OUTPUT"
+
+    - name: Job summary
+      shell: bash
+      run: |
+        { echo '## isitdone'; echo; head -c 900000 "$RUNNER_TEMP/isitdone.md"; } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Sticky PR comment
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: |
+        set +e
+        MARKER='<!-- isitdone:report -->'
+        if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+          echo "::notice::Fork PR: GITHUB_TOKEN is read-only, skipping the PR comment. The receipt is in the job summary."
+          exit 0
+        fi
+        { echo "$MARKER"; echo '### isitdone'; echo; head -c 60000 "$RUNNER_TEMP/isitdone.md"; } > "$RUNNER_TEMP/comment.md"
+        ID=$(gh api --paginate -X GET "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F per_page=100 \
+              --jq ".[] | select(.user.login==\"github-actions[bot]\") | select(.body | contains(\"$MARKER\")) | .id" 2>/dev/null | head -n 1)
+        if [ -n "$ID" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$ID" -F body=@"$RUNNER_TEMP/comment.md" >/dev/null \
+            || echo "::warning::Could not update the PR comment (the workflow needs permissions: pull-requests: write). The receipt is in the job summary."
+        else
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$RUNNER_TEMP/comment.md" >/dev/null \
+            || echo "::warning::Could not create the PR comment (the workflow needs permissions: pull-requests: write). The receipt is in the job summary."
+        fi
+        exit 0
+
+    - name: Upload SARIF
+      if: inputs.sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ runner.temp }}/isitdone.sarif
+        category: isitdone
+
+    - name: Fail if not done
+      if: steps.run.outputs.code != '0'
+      shell: bash
+      run: |
+        echo "::error::isitdone: NOT DONE (exit ${{ steps.run.outputs.code }}). See the job summary."
+        exit 1

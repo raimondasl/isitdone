@@ -1,6 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { detectChecks } from './detect.js';
 import { readJsonFile, stripBom } from './fsutil.js';
@@ -8,21 +7,28 @@ import { detectHosts, getHost, HOST_NAMES, type HostAdapter, type HostName } fro
 import { RECEIPT_DIR } from './git.js';
 import { budgetSeconds } from './verify.js';
 
+export type HookEvent = 'stop' | 'edit';
+
 export interface InitOptions {
   root: string;
   /** Hosts to install into. "auto" = every host with a settings dir in the repo (or in HOME when scope is user). */
   hosts: HostName[] | 'auto' | 'all';
   scope: 'project' | 'user';
-  /** Hook command; defaults to `npx -y <package> hook --host <name>`. */
+  /** Stop-hook command; defaults to `npx -y <package> hook --host <name>`. The edit hook appends ` --event edit`. */
   command?: (host: HostAdapter) => string;
   /** Hook timeout in seconds. Default: enough for every detected check plus a margin, at least 600. */
   timeout?: number;
   remove?: boolean;
+  /** Also install the warn-only post-edit hook where the host supports it. Default true. */
+  editHook?: boolean;
 }
 
 export interface InitResult {
   host: HostName;
   displayName: string;
+  event: HookEvent;
+  /** Host's event name (Stop, PostToolUse, AfterAgent, ...). */
+  hostEvent: string;
   path: string;
   scope: 'project' | 'user';
   action: 'added' | 'updated' | 'unchanged' | 'removed' | 'absent';
@@ -31,13 +37,28 @@ export interface InitResult {
   note: string | null;
 }
 
+export interface InstalledHook {
+  host: HostAdapter;
+  event: HookEvent;
+  scope: 'project' | 'user';
+  path: string;
+  command: string;
+  timeout: number | null;
+}
+
 export const DEFAULT_HOOK_TIMEOUT_S = 600;
+/** The edit hook only scans a diff; it must stay fast. */
+export const EDIT_HOOK_TIMEOUT_S = 30;
 /** Startup margin for npx resolution and git hashing, in seconds. */
 const HOOK_MARGIN_S = 60;
 export const PACKAGE_NAME = '@aivolution/isitdone';
 
 export function defaultCommand(host: HostAdapter): string {
   return `npx -y ${PACKAGE_NAME} hook --host ${host.name}`;
+}
+
+export function editCommand(stopCommand: string): string {
+  return `${stopCommand} --event edit`;
 }
 
 function readSettings(path: string): Record<string, unknown> {
@@ -101,48 +122,80 @@ export function init(opts: InitOptions): InitResult[] {
   const results: InitResult[] = [];
   const timeout = Math.ceil(opts.timeout ?? recommendedTimeout(opts.root));
   if (!(timeout > 0)) throw new Error('timeout must be a positive number of seconds');
-  const targets = opts.remove
-    ? // Remove from every scope where our hook is installed, unless hosts were named explicitly.
-      installedHooks(opts.root)
-        .filter((h) => opts.hosts === 'auto' || opts.hosts === 'all' || (opts.hosts as HostName[]).includes(h.host.name))
-        .map((h) => ({ host: h.host, scope: h.scope }))
-    : resolveHosts(opts.root, opts.hosts, opts.scope);
-  if (opts.remove && targets.length === 0) {
-    for (const { host, scope } of resolveHosts(opts.root, opts.hosts, opts.scope)) {
-      results.push({ host: host.name, displayName: host.displayName, path: host.settingsPath(opts.root, scope), scope, action: 'absent', command: '', timeout, note: null });
+  const wantEdit = opts.editHook ?? true;
+
+  if (opts.remove) {
+    // Remove from every scope where our hooks are installed, unless hosts were named explicitly.
+    const targets = installedHooks(opts.root).filter((h) => opts.hosts === 'auto' || opts.hosts === 'all' || (opts.hosts as HostName[]).includes(h.host.name));
+    if (targets.length === 0) {
+      for (const { host, scope } of resolveHosts(opts.root, opts.hosts, opts.scope)) {
+        results.push({ host: host.name, displayName: host.displayName, event: 'stop', hostEvent: host.event, path: host.settingsPath(opts.root, scope), scope, action: 'absent', command: '', timeout, note: null });
+      }
+      return results;
+    }
+    const seen = new Set<string>();
+    for (const t of targets) {
+      const key = `${t.host.name}:${t.scope}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const settings = readSettings(t.path);
+      const stopBefore = t.host.registered(settings);
+      const editBefore = t.host.edit?.registered(settings) ?? null;
+      const changedStop = t.host.unregister(settings);
+      const changedEdit = t.host.edit ? t.host.edit.unregister(settings) : false;
+      if (changedStop || changedEdit) writeSettings(t.path, settings);
+      results.push({ host: t.host.name, displayName: t.host.displayName, event: 'stop', hostEvent: t.host.event, path: t.path, scope: t.scope, action: changedStop ? 'removed' : 'absent', command: stopBefore ?? '', timeout, note: null });
+      if (t.host.edit && editBefore) results.push({ host: t.host.name, displayName: t.host.displayName, event: 'edit', hostEvent: t.host.edit.event, path: t.path, scope: t.scope, action: changedEdit ? 'removed' : 'absent', command: editBefore, timeout: EDIT_HOOK_TIMEOUT_S, note: null });
     }
     return results;
   }
-  for (const { host, scope } of targets) {
+
+  for (const { host, scope } of resolveHosts(opts.root, opts.hosts, opts.scope)) {
     const path = host.settingsPath(opts.root, scope);
     const command = (opts.command ?? defaultCommand)(host);
     const settings = readSettings(path);
-    const before = host.registered(settings);
-    if (opts.remove) {
-      const changed = host.unregister(settings);
-      if (changed) writeSettings(path, settings);
-      results.push({ host: host.name, displayName: host.displayName, path, scope, action: changed ? 'removed' : 'absent', command: before ?? command, timeout, note: null });
-      continue;
+    const stopBefore = host.registered(settings);
+    const changedStop = host.register(settings, command, timeout);
+    let changedEdit = false;
+    let editBefore: string | null = null;
+    if (wantEdit && host.edit) {
+      editBefore = host.edit.registered(settings);
+      changedEdit = host.edit.register(settings, editCommand(command), EDIT_HOOK_TIMEOUT_S);
     }
-    const changed = host.register(settings, command, timeout);
-    if (changed) writeSettings(path, settings);
+    if (changedStop || changedEdit) writeSettings(path, settings);
     results.push({
       host: host.name,
       displayName: host.displayName,
+      event: 'stop',
+      hostEvent: host.event,
       path,
       scope,
-      action: !changed ? 'unchanged' : before ? 'updated' : 'added',
+      action: !changedStop ? 'unchanged' : stopBefore ? 'updated' : 'added',
       command,
       timeout,
       note: host.postInstallNote,
     });
+    if (wantEdit && host.edit) {
+      results.push({
+        host: host.name,
+        displayName: host.displayName,
+        event: 'edit',
+        hostEvent: host.edit.event,
+        path,
+        scope,
+        action: !changedEdit ? 'unchanged' : editBefore ? 'updated' : 'added',
+        command: editCommand(command),
+        timeout: EDIT_HOOK_TIMEOUT_S,
+        note: null,
+      });
+    }
   }
   return results;
 }
 
-/** Which hosts currently have an isitdone hook, checking project then user scope. */
-export function installedHooks(root: string): Array<{ host: HostAdapter; scope: 'project' | 'user'; path: string; command: string; timeout: number | null }> {
-  const out: Array<{ host: HostAdapter; scope: 'project' | 'user'; path: string; command: string; timeout: number | null }> = [];
+/** Which hosts currently have isitdone hooks, checking project then user scope. */
+export function installedHooks(root: string): InstalledHook[] {
+  const out: InstalledHook[] = [];
   for (const name of HOST_NAMES) {
     const host = getHost(name);
     for (const scope of ['project', 'user'] as const) {
@@ -154,8 +207,10 @@ export function installedHooks(root: string): Array<{ host: HostAdapter; scope: 
       } catch {
         continue;
       }
-      const command = host.registered(settings);
-      if (command) out.push({ host, scope, path, command, timeout: registeredTimeout(settings, command, host) });
+      const stop = host.registered(settings);
+      if (stop) out.push({ host, event: 'stop', scope, path, command: stop, timeout: registeredTimeout(settings, stop, host) });
+      const edit = host.edit?.registered(settings) ?? null;
+      if (edit) out.push({ host, event: 'edit', scope, path, command: edit, timeout: registeredTimeout(settings, edit, host) });
     }
   }
   return out;
