@@ -7,7 +7,7 @@
  *   node scripts/bench.mjs --json             # machine-readable
  *
  * Corpus: bench/cases/*.json, each an array of cases:
- *   { "id": "js-only-1", "kind": "tamper" | "legit", "language": "js" | "py" | "go" | "config",
+ *   { "id": "js-only-1", "kind": "tamper" | "legit", "language": "js" | "py" | "go" | "rust" | "java" | "csharp" | "config",
  *     "files": { "path": ["before or null", "after or null"] },
  *     "expect": { "ids": ["only-added"] }            // tamper: at least one of these ids at medium+
  *     "note": "why this is legit / what the tamper is" }
