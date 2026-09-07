@@ -1,0 +1,41 @@
+# isitdone demo: text captured from a real run (scripts/demo.mjs).
+# The temp repository path was replaced by /tmp/demo-app; nothing else was edited.
+
+## step A: `isitdone hook --host claude` -> {"decision":"block","reason":...}
+
+isitdone: NOT DONE. 1 check failed on the current working tree (attempt 1/3). [isitdone 0.3.0]
+You claimed: "I implemented the discount and all tests pass."
+
+  npm test      FAIL  1 failed, 2 passed
+
+--- npm test (last 20 lines) ---
+test at test\price.test.mjs:15:1
+✖ discount is taken off before tax (1.2285ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  25.6 !== 24.6
+
+      at TestContext.<anonymous> (file:///tmp/demo-app/test/price.test.mjs:16:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1306:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
+      at Test.postRun (node:internal/test_runner/test:1447:19)
+      at Test.run (node:internal/test_runner/test:1372:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 25.6,
+    expected: 24.6,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+Fix the failures, then run `npx isitdone` and paste its output before claiming completion. Do not skip, delete or weaken tests to make this pass; if a check is wrong for this repo, say so explicitly to the user.
+
+## step B: `isitdone --no-cache` (exit 0; ANSI colours stripped here)
+
+isitdone  main@5b8af19  dirty (1 file)
+
+  npm test      PASS  501ms   0 failed, 3 passed
+
+  DONE   receipt -> PASS (tree 1ea370e, 1 checks, 1.8s)

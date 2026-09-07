@@ -2,6 +2,10 @@
 
 **Don't let your coding agent say "done" until the tests actually pass.**
 
+<p align="center"><img src="docs/demo.svg" alt="isitdone blocks a false 'done': the Stop hook runs the real tests, they fail, the agent fixes them, the receipt says DONE" width="880"></p>
+
+*Rendered from a real run (`npm run demo`): the agent lines are narration; the hook and CLI output are captured as-is, with only the temporary path shortened.*
+
 `isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor and Gemini CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, scans the diff for weakened tests, and refuses the stop until they pass. It also tells the agent mid-turn when an edit just weakened a test, runs the same verification on pull requests as a GitHub Action, and leaves a git-bound receipt you can paste into a PR.
 
 ```
