@@ -2,7 +2,8 @@
  * Warn-only check after the agent edits a file: scan just that file against HEAD (or a base ref)
  * and produce a short note the agent can read mid-turn. Never blocks; a scan failure yields nothing.
  */
-import { isAbsolute, relative, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { collectDiff, readAtBase, readNow } from './diff.js';
 import { gitTopLevel } from './git.js';
 import { formatSummaryLine, isTestConfigFile, isTestFile, scanIntegrity, type Finding, type IntegrityReport } from './integrity.js';
@@ -19,8 +20,24 @@ export interface EditCheck {
 }
 
 export function toRepoPath(top: string, file: string): string {
-  const abs = isAbsolute(file) ? file : resolve(top, file);
-  return relative(top, abs).replace(/\\/g, '/');
+  let abs = isAbsolute(file) ? file : resolve(top, file);
+  // Canonical long-name form (Windows 8.3 short names, symlinks); a deleted file canonicalises its parent.
+  try {
+    abs = realpathSync.native(abs);
+  } catch {
+    try {
+      abs = join(realpathSync.native(dirname(abs)), basename(abs));
+    } catch {
+      // keep as resolved
+    }
+  }
+  let base = top;
+  try {
+    base = realpathSync.native(top);
+  } catch {
+    // keep as given
+  }
+  return relative(base, abs).replace(/\\/g, '/');
 }
 
 /** Scan one edited file. `file` may be absolute or relative to `cwd`. */
