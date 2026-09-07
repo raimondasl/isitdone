@@ -59,4 +59,38 @@ describe('TurnTracker', () => {
     second.t.finalize();
     expect(second.out.map((c) => c.verdict)).toEqual(['NEVER_RAN']);
   });
+
+  it('an untouched turn is not closed; rollback retracts the last N closed turns, the open one included', () => {
+    const out: ClaimRecord[] = [];
+    const stats = { editTurns: 0 };
+    const t = new TurnTracker({ project: () => 'p', session: 's', agent: 'codex', sinceMs: 0 }, out, stats);
+    t.finalize(); // nothing happened yet
+    t.edit(1);
+    t.ran('npm test', true, 2);
+    t.text('Done, tests pass.', 3);
+    t.finalize();
+    t.finalize(); // no-op: does not close an empty turn
+    expect(out.map((c) => c.verdict)).toEqual(['VERIFIED']);
+    expect(stats.editTurns).toBe(1);
+    t.prompt();
+    t.finalize(); // a prompted turn with no activity is still a turn
+    t.edit(4);
+    t.text('Done.', 5); // left open
+    t.rollback(2); // closes the open turn (a NEVER_RAN claim), then retracts it and the empty prompted turn
+    expect(out.map((c) => c.verdict)).toEqual(['VERIFIED']);
+    expect(stats.editTurns).toBe(1);
+    t.rollback(5);
+    expect(out).toEqual([]);
+    expect(stats.editTurns).toBe(0);
+  });
+
+  it('flags claims from lossy transcripts', () => {
+    const out: ClaimRecord[] = [];
+    const t = new TurnTracker({ project: () => 'p', session: 's', agent: 'cursor', sinceMs: 0, lossy: true }, out, { editTurns: 0 });
+    t.edit(1);
+    t.ran('npm test', null, 2);
+    t.text('Done, tests pass.', 3);
+    t.finalize();
+    expect(out.map((c) => [c.verdict, c.agent, c.lossy])).toEqual([['VERIFIED', 'cursor', true]]);
+  });
 });

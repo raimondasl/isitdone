@@ -1,6 +1,6 @@
 /**
- * Turn bookkeeping shared by the transcript parsers (Claude Code, Codex): per user turn, did the agent edit files,
- * run tests, and what did it say last. `finalize()` classifies the turn's completion claim.
+ * Turn bookkeeping shared by the transcript parsers (Claude Code, Codex, Gemini CLI, Qwen Code, Cursor): per user turn,
+ * did the agent edit files, run tests, and what did it say last. `finalize()` classifies the turn's completion claim.
  */
 import { findClaim } from './claims.js';
 
@@ -18,7 +18,9 @@ export interface ClaimRecord {
   /** Non-test verification commands (typecheck, lint, build) in the turn. */
   checkRuns: number;
   /** Which agent wrote the transcript. */
-  agent: 'claude-code' | 'codex';
+  agent: 'claude-code' | 'codex' | 'gemini' | 'qwen' | 'cursor';
+  /** The transcript carries no exit codes (Cursor agent-transcripts): every test run was assumed to have passed. */
+  lossy?: boolean;
 }
 
 export const TEST_CMD = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|tests|test:\w+|jest|vitest|e2e)\b|\b(?:npx\s+|pnpm\s+|yarn\s+|bunx\s+)?(?:vitest|jest|mocha|ava|tap|playwright\s+test|cypress\s+run|pytest|py\.test|python3?\s+-m\s+(?:pytest|unittest)|unittest|go\s+test|cargo\s+(?:test|nextest)|dotnet\s+test|make\s+(?:test|tests|check)|gradle\w*\s+test|mvnw?\s+.*\btest\b|rspec|phpunit|mix\s+test|swift\s+test|isitdone(?!\s+(?:doctor|init|uninstall|history|hook|update|receipt|detect)\b))\b/;
@@ -52,20 +54,31 @@ export class TurnTracker {
   private pending = new Map<string, { kind: 'test' | 'check'; at: number }>();
   /** Old id -> the id a pending command now lives under (Codex: call id -> session id -> write_stdin call id). */
   private aliases = new Map<string, string>();
+  /** Anything happened since the last finalize(): only such turns are closed and remembered for rollback(). */
+  private active = false;
+  /** Closed turns of this session, oldest first, so a host's "undo the last N turns" can retract their claims. */
+  private readonly turns: Array<{ claim: ClaimRecord | null; edited: boolean }> = [];
 
   constructor(
-    private readonly meta: { project: () => string; session: string; agent: ClaimRecord['agent']; sinceMs: number },
+    private readonly meta: { project: () => string; session: string; agent: ClaimRecord['agent']; sinceMs: number; lossy?: boolean },
     private readonly out: ClaimRecord[],
     private readonly stats: TurnStats,
   ) {}
 
+  /** A user prompt opened this turn (a prompted turn with no other activity still counts for rollback()). */
+  prompt(): void {
+    this.active = true;
+  }
+
   edit(at: number): void {
+    this.active = true;
     this.edits++;
     this.lastEditAt = at;
   }
 
   /** A command was issued; its outcome arrives later via resolve(). */
   command(id: string, cmd: string, at: number): void {
+    this.active = true;
     const kind = classifyCommand(cmd);
     if (kind === 'test' || kind === 'check') this.pending.set(id, { kind, at });
     else if (kind === 'edit') this.edit(at);
@@ -107,8 +120,9 @@ export class TurnTracker {
     this.pending.delete(this.key(id));
   }
 
-  /** A command with a known outcome, all at once (paginated Codex items). */
+  /** A command with a known outcome, all at once (paginated Codex items, Gemini tool calls, Cursor bubbles). */
   ran(cmd: string, ok: boolean | null, at: number): void {
+    this.active = true;
     const kind = classifyCommand(cmd);
     if (kind === 'test' || kind === 'check') this.record(kind, ok, at);
     else if (kind === 'edit') this.edit(at);
@@ -125,12 +139,32 @@ export class TurnTracker {
 
   text(t: string, at: number): void {
     if (t.trim() === '') return;
+    this.active = true;
     this.lastText = t;
     this.lastTextAt = at;
   }
 
-  /** Close the turn: classify its final claim (if any) and reset. */
+  /**
+   * The host undid the last `n` turns (Codex thread_rolled_back): the open turn is closed first and counts as one of
+   * them; their claims are retracted and editTurns adjusted.
+   */
+  rollback(n: number): void {
+    this.finalize();
+    for (let i = 0; i < n; i++) {
+      const t = this.turns.pop();
+      if (!t) break;
+      if (t.edited) this.stats.editTurns--;
+      if (t.claim) {
+        const k = this.out.lastIndexOf(t.claim);
+        if (k >= 0) this.out.splice(k, 1);
+      }
+    }
+  }
+
+  /** Close the turn: classify its final claim (if any) and reset. A no-op when nothing happened since the last close. */
   finalize(): void {
+    if (!this.active) return;
+    let pushed: ClaimRecord | null = null;
     if (this.edits > 0) this.stats.editTurns++;
     if (this.edits > 0 || this.testRuns > 0) {
       const claim = findClaim(this.lastText);
@@ -140,7 +174,7 @@ export class TurnTracker {
         else if (!this.lastTest.ok) verdict = 'FAILED';
         else if (this.lastEditAt > this.lastTest.at) verdict = 'STALE';
         else verdict = 'VERIFIED';
-        this.out.push({
+        pushed = {
           project: this.meta.project(),
           session: this.meta.session,
           at: new Date(this.lastTextAt || 0).toISOString(),
@@ -151,9 +185,13 @@ export class TurnTracker {
           testRuns: this.testRuns,
           checkRuns: this.checkRuns,
           agent: this.meta.agent,
-        });
+        };
+        if (this.meta.lossy) pushed.lossy = true;
+        this.out.push(pushed);
       }
     }
+    this.turns.push({ claim: pushed, edited: this.edits > 0 });
+    this.active = false;
     this.edits = 0;
     this.lastEditAt = 0;
     this.testRuns = 0;

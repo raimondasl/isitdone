@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { FAIL, PASS, nodePkg, tempRepo, type TempRepo } from './helpers.js';
 
@@ -28,8 +29,8 @@ beforeAll(async () => {
   });
 }, 60_000);
 
-function cli(args: string[], cwd: string, stdin?: string) {
-  const r = spawnSync(process.execPath, [BUNDLE, ...args], { cwd, encoding: 'utf8', input: stdin, env: { ...process.env, NO_COLOR: '1', ISITDONE_DEBUG: '' }, windowsHide: true, timeout: 60_000 });
+function cli(args: string[], cwd: string, stdin?: string, env: Record<string, string> = {}) {
+  const r = spawnSync(process.execPath, [BUNDLE, ...args], { cwd, encoding: 'utf8', input: stdin, env: { ...process.env, NO_COLOR: '1', ISITDONE_DEBUG: '', ...env }, windowsHide: true, timeout: 60_000 });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -133,5 +134,45 @@ describe('cli end-to-end', () => {
     expect(report.ok).toBe(false);
     expect(report.checks.find((c: { name: string }) => c.name === 'checks').ok).toBe(false);
     expect(report.checks.find((c: { name: string }) => c.name === 'hooks').ok).toBe(false);
+  });
+
+  it('history: one line per agent, lossy Cursor sessions flagged, --json carries byAgent', () => {
+    repo = tempRepo({ files: { 'README.md': 'x' } });
+    // A home of its own, and every per-OS transcript location pointed inside it, so the real machine is never scanned.
+    const home = mkdtempSync(join(tmpdir(), 'isitdone-history-home-'));
+    const env = { HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: join(home, '.config'), CODEX_HOME: '', GEMINI_CLI_HOME: '', QWEN_HOME: '' };
+    const put = (rel: string, lines: unknown[]) => {
+      const p = join(home, rel);
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    };
+    const at = '2026-09-01T10:00:00.000Z';
+    put('.claude/projects/C--work-app/s1.jsonl', [
+      { type: 'user', timestamp: at, cwd: '/work/app', message: { role: 'user', content: 'go' } },
+      { type: 'assistant', timestamp: at, cwd: '/work/app', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/work/app/a.ts' } }] } },
+      { type: 'assistant', timestamp: at, cwd: '/work/app', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'npm test' } }] } },
+      { type: 'user', timestamp: at, cwd: '/work/app', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'ok' }] } },
+      { type: 'assistant', timestamp: at, cwd: '/work/app', message: { role: 'assistant', content: [{ type: 'text', text: 'Done. All tests pass.' }] } },
+    ]);
+    put('.cursor/projects/work-app/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl', [
+      { role: 'user', message: { content: [{ type: 'text', text: '<user_query>\ngo\n</user_query>' }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: '[REDACTED]' }, { type: 'tool_use', name: 'Write', input: { path: '/work/app/a.ts', contents: 'x' } }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: '[REDACTED]' }, { type: 'tool_use', name: 'Shell', input: { command: 'npm test' } }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'Done, tests pass.' }] } },
+    ]);
+    try {
+      const r = cli(['history', '--exclude', 'nothing-matches'], repo.root, undefined, env);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/claude-code\s+1 session\s+1 claim\s+100%\s+verified/);
+      expect(r.stdout).toMatch(/cursor\s+1 session\s+1 claim\s+100%\s+verified\s+exit codes unavailable in 1 session/);
+      const j = JSON.parse(cli(['history', '--json'], repo.root, undefined, env).stdout);
+      expect(j.byAgent).toEqual({ 'claude-code': { sessions: 1, claims: 1, verified: 1 }, cursor: { sessions: 1, claims: 1, verified: 1, lossy: 1 } });
+      expect(j.cursorSource).toBe('transcripts');
+      expect(j.claims).toBeUndefined();
+      expect(cli(['history', '--min', '100'], repo.root, undefined, env).code).toBe(0);
+      expect(cli(['--help'], repo.root).stdout).toContain('Gemini CLI, Qwen Code and Cursor transcripts');
+    } finally {
+      rmSync(home, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
 });
