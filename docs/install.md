@@ -56,6 +56,14 @@ The plugin registers the same Stop hook and adds the `isitdone` skill.
 npx skills add raimondasl/isitdone
 ```
 
+## Pull requests
+
+Add the GitHub Action to run the same verification on every pull request:
+
+```yaml
+- uses: raimondasl/isitdone@v0
+```
+
 ## Uninstall
 
 ```bash
