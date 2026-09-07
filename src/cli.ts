@@ -45,7 +45,7 @@ Options for run
   --report <file>         also write a markdown report (job summaries, PR comments)
   --json-file <file>      also write the JSON result to a file
 
-Options for history
+Options for history  (reads Claude Code, Codex, Gemini CLI, Qwen Code and Cursor transcripts locally; nothing leaves the machine)
   --since <30d|2w|2026-01-01>   only sessions after this point
   --exclude <substring>   skip projects whose path contains this (repeatable; also .isitdone.json history.exclude)
   --verbose               list every claim with its verdict
@@ -227,8 +227,13 @@ async function cmdHistory(args: Args): Promise<number> {
   } else {
     out(`${s.bold('isitdone history')}  ${s.dim(report.projectsDir)}${report.since ? s.dim(`  since ${report.since.slice(0, 10)}`) : ''}`);
     out(`  scanned ${report.scannedFiles} session${report.scannedFiles === 1 ? '' : 's'} in ${report.byProject.length || 'no'} project${report.byProject.length === 1 ? '' : 's'}; ${report.editTurns} turns edited files; ${total} of those ended with a completion claim${report.excludedDirs.length ? s.dim(`; ${report.excludedDirs.length} project dir${report.excludedDirs.length === 1 ? '' : 's'} excluded`) : ''}`);
+    for (const [agent, a] of Object.entries(report.byAgent)) {
+      if (a.sessions === 0) continue;
+      const lossy = a.lossy ? s.yellow(`  exit codes unavailable in ${a.lossy} session${a.lossy === 1 ? '' : 's'} (test runs assumed to pass)`) : '';
+      out(`  ${s.dim(pad(agent, 12))} ${pad(`${a.sessions} session${a.sessions === 1 ? '' : 's'}`, 13)} ${pad(`${a.claims} claim${a.claims === 1 ? '' : 's'}`, 11)} ${pad(pct(a.verified, a.claims), 5)} verified${lossy}`);
+    }
     if (total === 0) {
-      out(`  ${s.yellow('no completion claims found')}  ${s.dim('(no Claude Code transcripts under this directory, or none with file edits)')}`);
+      out(`  ${s.yellow('no completion claims found')}  ${s.dim('(no Claude Code, Codex, Gemini CLI, Qwen Code or Cursor transcripts found, or none with file edits)')}`);
       return 0;
     }
     out('');
@@ -242,7 +247,7 @@ async function cmdHistory(args: Args): Promise<number> {
     if (worst) out(`  worst project  ${worst.project}  ${worst.unbackedPct}% unbacked (${worst.claims} claims)`);
     if (args.flags.verbose === true) {
       out('');
-      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}`);
+      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}${c.lossy ? s.yellow('  (no exit codes)') : ''}`);
     } else {
       out('');
       out(`  ${s.dim('per project:')}`);

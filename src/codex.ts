@@ -1,7 +1,8 @@
 /**
  * Codex CLI rollout transcripts for `isitdone history`.
  * Files: $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl (older: flat sessions/*.jsonl), archived_sessions/*.jsonl,
- * optionally zstd-compressed after 7 days (*.jsonl.zst). Each line is {timestamp, type, payload}; the first is session_meta.
+ * optionally zstd-compressed after 7 days (*.jsonl.zst). Each line is {timestamp, type, payload}; the first is session_meta
+ * (pre-v0.40 files: a bare {id, timestamp, instructions} line, then unwrapped ResponseItems).
  * Both history modes are handled: legacy (response_item/event_msg lines) and paginated (item_completed items).
  */
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -64,15 +65,20 @@ function obj(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-/** Text of a user/assistant `message` response item, or null when it is injected context rather than a prompt. */
-function messageText(payload: Record<string, unknown>): string | null {
+/** All text parts of a `message` response item, injected context included. */
+function rawText(payload: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const c of Array.isArray(payload.content) ? (payload.content as Array<Record<string, unknown>>) : []) {
     const t = c && typeof c.text === 'string' ? c.text : null;
     if (t !== null && (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text')) parts.push(t);
   }
-  if (parts.length === 0) return null;
-  let text = parts.join('\n');
+  return parts.join('\n');
+}
+
+/** Text of a user/assistant `message` response item, or null when it is injected context rather than a prompt. */
+function messageText(payload: Record<string, unknown>): string | null {
+  let text = rawText(payload);
+  if (text === '') return null;
   const lower = text.trimStart().toLowerCase();
   if (CONTEXTUAL_PREFIXES.some((p) => lower.startsWith(p))) return null;
   const marker = '## My request for Codex:';
@@ -177,6 +183,10 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
   const turn = new TurnTracker({ project: () => cwd ?? 'codex', session, agent: 'codex', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
   let first = true;
   let sawTurnEvents = false;
+  // Pre-v0.40 "v0" rollouts: a bare {id, timestamp, instructions} first line, then unwrapped ResponseItems with no
+  // timestamps; lines are timed from the session start so ordering (edit before/after test) still works.
+  let v0 = false;
+  let v0At = 0;
   // Codex writes the same edit or command as a response_item and again as an item_completed (paginated mode) or a
   // patch_apply_end (legacy mode); ids are shared, so each is counted once.
   const seen = new Set<string>();
@@ -188,13 +198,24 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
     } catch {
       continue;
     }
-    const at = ts(j.timestamp);
-    const type = j.type;
-    const payload = obj(j.payload) ?? {};
+    let at = ts(j.timestamp);
+    let type = j.type;
+    let payload = obj(j.payload) ?? {};
     if (first) {
       first = false;
       if (type === 'session_meta' && typeof payload.cwd === 'string') cwd = payload.cwd;
       if (type === 'session_meta') continue;
+      if (type === undefined && typeof j.id === 'string' && j.payload === undefined) {
+        v0 = true;
+        v0At = at;
+        continue;
+      }
+    }
+    if (v0) {
+      if (j.record_type !== undefined) continue; // {"record_type":"state"} snapshots
+      payload = j;
+      type = 'response_item';
+      at = ++v0At;
     }
     if (type === 'turn_context' && typeof payload.cwd === 'string') cwd = payload.cwd;
     if (type === 'event_msg') {
@@ -202,6 +223,10 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
       if (et === 'turn_started') {
         sawTurnEvents = true;
         turn.finalize();
+        turn.prompt();
+      } else if (et === 'thread_rolled_back') {
+        // The user undid the last N turns (/undo, thread/rollback): their claims no longer stand.
+        if (typeof payload.num_turns === 'number' && payload.num_turns > 0) turn.rollback(payload.num_turns);
       } else if (et === 'turn_complete') {
         if (typeof payload.last_agent_message === 'string') turn.text(payload.last_agent_message, at);
         sawTurnEvents = true;
@@ -213,6 +238,7 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
         turn.finalize();
       } else if (et === 'user_message' && !sawTurnEvents) {
         turn.finalize();
+        turn.prompt();
       } else if (et === 'agent_message' && typeof payload.message === 'string') {
         turn.text(payload.message, at);
       } else if (et === 'patch_apply_end') {
@@ -242,8 +268,9 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
         } else if (kind === 'AgentMessage') {
           const t = (Array.isArray(item.content) ? (item.content as Array<Record<string, unknown>>) : []).map((c) => (typeof c.text === 'string' ? c.text : '')).join('\n');
           if (t.trim()) turn.text(t, at);
-        } else if (kind === 'UserMessage' && !sawTurnEvents) {
-          turn.finalize();
+        } else if (kind === 'UserMessage') {
+          if (!sawTurnEvents) turn.finalize();
+          turn.prompt();
         }
       }
       continue;
@@ -253,8 +280,15 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
     if (pt === 'message') {
       const role = payload.role;
       const text = messageText(payload);
-      if (role === 'user' && text !== null && !sawTurnEvents) turn.finalize();
-      else if (role === 'assistant' && text !== null) turn.text(text, at);
+      if (role === 'user' && text !== null) {
+        if (!sawTurnEvents) turn.finalize();
+        turn.prompt();
+      } else if (role === 'assistant' && text !== null) turn.text(text, at);
+      else if (role === 'user' && cwd === null) {
+        // Injected <environment_context> names the working directory; v0 files have no session_meta.cwd.
+        const m = /<cwd>\s*([^<]+?)\s*<\/cwd>/.exec(rawText(payload));
+        if (m) cwd = m[1] as string;
+      }
     } else if (pt === 'function_call') {
       const id = typeof payload.call_id === 'string' ? payload.call_id : '';
       const cmd = commandOf(payload);

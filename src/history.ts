@@ -1,6 +1,6 @@
 /**
- * `isitdone history`: a retrospective over local coding-agent transcripts (Claude Code, Codex CLI).
- * For every turn in which the agent edited files, look at its final message: if it claims completion,
+ * `isitdone history`: a retrospective over local coding-agent transcripts (Claude Code, Codex CLI, Gemini CLI, Qwen Code,
+ * Cursor). For every turn in which the agent edited files, look at its final message: if it claims completion,
  * was a test command actually run (and did it pass) after the last edit?
  *
  * Reads transcripts locally. Nothing leaves the machine. Only aggregate counts and (with --verbose) the quoted
@@ -11,6 +11,8 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { codexSessionFiles, scanCodexSession } from './codex.js';
+import { cursorTranscriptFiles, defaultCursorDir, defaultCursorUserDir, openCursorStore, scanCursorTranscript, transcriptComposerId, type CursorComposer, type CursorStore } from './cursor.js';
+import { defaultGeminiDir, defaultQwenDir, geminiSessionFiles, qwenSessionFiles, scanGeminiSession, scanQwenSession } from './gemini.js';
 import { TurnTracker, ts, type ClaimRecord, type TurnStats, type Verdict } from './turns.js';
 
 export type { ClaimRecord, Verdict } from './turns.js';
@@ -26,9 +28,25 @@ export interface ProjectStats {
   unbackedPct: number;
 }
 
+export interface AgentStats {
+  sessions: number;
+  claims: number;
+  verified: number;
+  /** Sessions whose transcript carries no exit codes (Cursor agent-transcripts): their test runs were assumed to pass. */
+  lossy?: number;
+}
+
 export interface HistoryReport {
   projectsDir: string;
   codexDir: string | null;
+  geminiDir: string | null;
+  qwenDir: string | null;
+  /** ~/.cursor (agent-transcripts JSONL). */
+  cursorDir: string | null;
+  /** Cursor's user-data dir holding globalStorage/state.vscdb. */
+  cursorUserDir: string | null;
+  /** How Cursor sessions were read: the SQLite bubble store, the lossy JSONL transcripts, or neither found. */
+  cursorSource: 'sqlite' | 'transcripts' | 'sqlite+transcripts' | null;
   scannedFiles: number;
   skippedFiles: number;
   excludedDirs: string[];
@@ -37,7 +55,7 @@ export interface HistoryReport {
   editTurns: number;
   claims: ClaimRecord[];
   counts: Record<Verdict, number>;
-  byAgent: Record<string, { sessions: number; claims: number; verified: number }>;
+  byAgent: Record<string, AgentStats>;
   /** Share of claims that were VERIFIED. */
   verifiedPct: number;
   /** Share of claims with no passing test run after the last edit. */
@@ -51,6 +69,16 @@ export interface HistoryOptions {
   projectsDir?: string;
   /** Override $CODEX_HOME / ~/.codex (tests). Pass null to skip Codex. */
   codexDir?: string | null;
+  /** Override $GEMINI_CLI_HOME/.gemini / ~/.gemini (tests). Pass null to skip Gemini CLI. */
+  geminiDir?: string | null;
+  /** Override $QWEN_HOME / ~/.qwen (tests). Pass null to skip Qwen Code. */
+  qwenDir?: string | null;
+  /** Override ~/.cursor (tests). Pass null to skip Cursor agent-transcripts. */
+  cursorDir?: string | null;
+  /** Override Cursor's user-data dir (tests). Pass null to skip the SQLite bubble store. */
+  cursorUserDir?: string | null;
+  /** false: never load node:sqlite, read Cursor's JSONL transcripts only (tests). */
+  cursorSqlite?: boolean;
   since?: Date | null;
   /** Case-insensitive substrings; a project directory or path containing one is skipped. */
   exclude?: string[];
@@ -103,6 +131,7 @@ export async function scanSession(file: string, opts: { includeSubagents?: boole
       }
       // A real user prompt starts a new turn.
       turn.finalize();
+      turn.prompt();
       continue;
     }
     if (type === 'assistant' && message && Array.isArray(message.content)) {
@@ -142,14 +171,30 @@ export function defaultCodexDir(): string {
   return process.env.CODEX_HOME && process.env.CODEX_HOME !== '' ? process.env.CODEX_HOME : join(homedir(), '.codex');
 }
 
+type Agent = ClaimRecord['agent'];
+
+/** One unit of work for the scan loop: a transcript file, or a Cursor composer read from the open bubble store. */
+type Item =
+  | { kind: 'file'; agent: Agent; file: string; slug: string; label: string }
+  | { kind: 'cursor-db'; agent: 'cursor'; composer: CursorComposer; label: string; store: CursorStore };
+
 export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryReport> {
   const projectsDir = opts.projectsDir ?? defaultProjectsDir();
   const codexDir = opts.codexDir === undefined ? defaultCodexDir() : opts.codexDir;
+  const geminiDir = opts.geminiDir === undefined ? defaultGeminiDir() : opts.geminiDir;
+  const qwenDir = opts.qwenDir === undefined ? defaultQwenDir() : opts.qwenDir;
+  const cursorDir = opts.cursorDir === undefined ? defaultCursorDir() : opts.cursorDir;
+  const cursorUserDir = opts.cursorUserDir === undefined ? defaultCursorUserDir() : opts.cursorUserDir;
   const exclude = (opts.exclude ?? []).map((e) => e.toLowerCase()).filter(Boolean);
   const since = opts.since ?? null;
   const report: HistoryReport = {
     projectsDir,
     codexDir,
+    geminiDir,
+    qwenDir,
+    cursorDir,
+    cursorUserDir,
+    cursorSource: null,
     scannedFiles: 0,
     skippedFiles: 0,
     excludedDirs: [],
@@ -163,8 +208,16 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
     byProject: [],
     since: since ? since.toISOString() : null,
   };
+  const excludedDirs = new Set<string>();
+  /** True (and remembered for the report) when a project dir or label matches an exclusion. */
+  const excluded = (...names: string[]): boolean => {
+    const hit = names.find((n) => exclude.some((e) => n.toLowerCase().includes(e)));
+    if (hit === undefined) return false;
+    excludedDirs.add(names[0] as string);
+    return true;
+  };
 
-  const files: Array<{ file: string; slug: string; agent: 'claude-code' | 'codex' }> = [];
+  const items: Item[] = [];
   if (existsSync(projectsDir)) {
     for (const slug of readdirSync(projectsDir)) {
       const dir = join(projectsDir, slug);
@@ -175,10 +228,7 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
         continue;
       }
       if (!isDir) continue;
-      if (exclude.some((e) => slug.toLowerCase().includes(e))) {
-        report.excludedDirs.push(slug);
-        continue;
-      }
+      if (excluded(slug)) continue;
       for (const f of readdirSync(dir)) {
         const p = join(dir, f);
         try {
@@ -188,10 +238,10 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
               report.skippedFiles++;
               continue;
             }
-            files.push({ file: p, slug, agent: 'claude-code' });
+            items.push({ kind: 'file', agent: 'claude-code', file: p, slug, label: projectLabel(slug, null) });
           } else if (st.isDirectory() && opts.includeSubagents) {
             const sub = join(p, 'subagents');
-            if (existsSync(sub)) for (const s of readdirSync(sub)) if (s.endsWith('.jsonl')) files.push({ file: join(sub, s), slug, agent: 'claude-code' });
+            if (existsSync(sub)) for (const s of readdirSync(sub)) if (s.endsWith('.jsonl')) items.push({ kind: 'file', agent: 'claude-code', file: join(sub, s), slug, label: projectLabel(slug, null) });
           }
         } catch {
           report.skippedFiles++;
@@ -202,37 +252,114 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
   if (codexDir) {
     const { files: codexFiles, skipped } = codexSessionFiles(codexDir, since);
     report.skippedFiles += skipped;
-    for (const f of codexFiles) files.push({ file: f, slug: 'codex', agent: 'codex' });
+    for (const f of codexFiles) items.push({ kind: 'file', agent: 'codex', file: f, slug: 'codex', label: 'codex' });
+  }
+  if (geminiDir) {
+    const { files, skipped } = geminiSessionFiles(geminiDir, since, opts.includeSubagents);
+    report.skippedFiles += skipped;
+    for (const f of files) if (!excluded(f.slug, f.label)) items.push({ kind: 'file', agent: 'gemini', ...f });
+  }
+  if (qwenDir) {
+    const { files, skipped } = qwenSessionFiles(qwenDir, since);
+    report.skippedFiles += skipped;
+    for (const f of files) if (!excluded(f.slug, f.label)) items.push({ kind: 'file', agent: 'qwen', ...f });
+  }
+  // Cursor: the bubble store when node:sqlite can open it, then any JSONL transcript it did not already cover (Cursor CLI
+  // sessions live only in the JSONL; IDE sessions are in both, and the store has the exit codes).
+  let store: CursorStore | null = null;
+  const covered = new Set<string>();
+  if (cursorUserDir && opts.cursorSqlite !== false) {
+    try {
+      store = openCursorStore(cursorUserDir);
+    } catch {
+      store = null; // locked or unreadable: fall back to the transcripts
+      report.skippedFiles++;
+    }
+    if (store) {
+      report.cursorSource = 'sqlite';
+      for (const c of store.composers()) {
+        covered.add(c.id);
+        if (!c.agentic || (c.subagent && !opts.includeSubagents)) continue;
+        if (since && c.updatedAt && c.updatedAt < since.getTime()) {
+          report.skippedFiles++;
+          continue;
+        }
+        const label = c.project ?? `cursor:${c.id}`;
+        if (c.project && excluded(c.project)) continue;
+        items.push({ kind: 'cursor-db', agent: 'cursor', composer: c, label, store });
+      }
+    }
+  }
+  if (cursorDir) {
+    const { files, skipped } = cursorTranscriptFiles(cursorDir, since, opts.includeSubagents);
+    report.skippedFiles += skipped;
+    let added = 0;
+    for (const f of files) {
+      if (covered.has(transcriptComposerId(f.file)) || excluded(f.slug, f.label)) continue;
+      items.push({ kind: 'file', agent: 'cursor', ...f });
+      added++;
+    }
+    if (added > 0) report.cursorSource = store ? 'sqlite+transcripts' : 'transcripts';
   }
 
   const labels = new Map<string, string>();
   const stats: TurnStats = { editTurns: 0 };
   let done = 0;
-  for (const { file, slug, agent } of files) {
-    const project = {
-      label: labels.get(slug) ?? (agent === 'codex' ? 'codex' : projectLabel(slug, null)),
-      sawCwd: (cwd: string) => {
-        if (agent !== 'codex' && !labels.has(slug)) labels.set(slug, cwd);
-      },
-    };
+  for (const item of items) {
+    const agent = item.agent;
+    const before = report.claims.length;
+    let lossy = false;
     try {
-      const before = report.claims.length;
-      if (agent === 'codex') await scanCodexSession(file, { since }, report.claims, stats);
-      else await scanSession(file, { includeSubagents: opts.includeSubagents, since }, project, report.claims, stats);
+      if (item.kind === 'cursor-db') {
+        item.store.scan(item.composer, { since }, item.label, report.claims, stats);
+      } else if (agent === 'codex') await scanCodexSession(item.file, { since }, report.claims, stats);
+      else if (agent === 'gemini') await scanGeminiSession(item.file, { since, includeSubagents: opts.includeSubagents }, item.label, report.claims, stats);
+      else if (agent === 'qwen') {
+        const key = `qwen:${item.slug}`;
+        await scanQwenSession(item.file, { since, includeSubagents: opts.includeSubagents }, { label: labels.get(key) ?? item.label, sawCwd: (cwd) => labels.set(key, cwd) }, report.claims, stats);
+      } else if (agent === 'cursor') {
+        scanCursorTranscript(item.file, { since }, item.label, report.claims, stats);
+        lossy = true;
+      } else {
+        const project = {
+          label: labels.get(item.slug) ?? item.label,
+          sawCwd: (cwd: string) => {
+            if (!labels.has(item.slug)) labels.set(item.slug, cwd);
+          },
+        };
+        await scanSession(item.file, { includeSubagents: opts.includeSubagents, since }, project, report.claims, stats);
+      }
       report.scannedFiles++;
       report.sessions++;
       const a = (report.byAgent[agent] = report.byAgent[agent] ?? { sessions: 0, claims: 0, verified: 0 });
       a.sessions++;
       a.claims += report.claims.length - before;
       a.verified += report.claims.slice(before).filter((c) => c.verdict === 'VERIFIED').length;
+      if (lossy) a.lossy = (a.lossy ?? 0) + 1;
     } catch {
+      report.claims.length = before;
       report.skippedFiles++;
     }
     done++;
-    opts.onProgress?.(done, files.length);
+    opts.onProgress?.(done, items.length);
   }
+  store?.close();
+  report.excludedDirs = [...excludedDirs];
   // Exclusions may also match a cwd rather than the slug.
-  report.claims = report.claims.filter((c) => !exclude.some((e) => c.project.toLowerCase().includes(e)));
+  if (exclude.length > 0) {
+    const kept = report.claims.filter((c) => !exclude.some((e) => c.project.toLowerCase().includes(e)));
+    if (kept.length !== report.claims.length) {
+      for (const c of report.claims) {
+        if (kept.includes(c)) continue;
+        const a = report.byAgent[c.agent];
+        if (a) {
+          a.claims--;
+          if (c.verdict === 'VERIFIED') a.verified--;
+        }
+      }
+      report.claims = kept;
+    }
+  }
   report.editTurns = stats.editTurns;
   for (const c of report.claims) report.counts[c.verdict]++;
   const total = report.claims.length;

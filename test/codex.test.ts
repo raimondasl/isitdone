@@ -200,4 +200,95 @@ describe('scanCodexSession', () => {
     const none = await scanHistory({ projectsDir: projects, codexDir: null });
     expect(none.sessions).toBe(0);
   });
+
+  it('v0 rollouts (pre-v0.40): bare meta line, unwrapped items, state snapshots, cwd from the environment context', async () => {
+    // Reconstructed from rust-v0.20.0 core/src/rollout.rs (SessionMeta {id, timestamp, instructions}, bare ResponseItems).
+    dir = mkdtempSync(join(tmpdir(), 'isitdone-codex-'));
+    const shellCall = (id: string, cmd: string): Rec => ({ type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['bash', '-lc', cmd], timeout_ms: 10000 }), call_id: id });
+    const shellOut = (id: string, code: number): Rec => ({ type: 'function_call_output', call_id: id, output: JSON.stringify({ output: code ? '1 failed' : 'ok', metadata: { exit_code: code, duration_seconds: 1.2 } }) });
+    const say = (role: string, text: string): Rec => ({ type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] });
+    const file = write('sessions/rollout-2025-08-09T10-00-00-v0thread.jsonl', [
+      { id: 'v0thread', timestamp: '2025-08-09T10:00:00.000Z', instructions: 'be helpful', git: { branch: 'main' } },
+      { record_type: 'state' },
+      say('user', '<environment_context>\n  <cwd>/work/v0</cwd>\n  <shell>bash</shell>\n</environment_context>'),
+      say('user', 'fix it'),
+      shellCall('c1', "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: a.ts\n@@\n-a\n+b\n*** End Patch\nEOF"),
+      shellOut('c1', 0),
+      shellCall('c2', 'npm test'),
+      shellOut('c2', 1),
+      { type: 'reasoning', summary: [] },
+      say('assistant', 'Done, tests pass.'),
+      say('user', 'thanks, and again'),
+      shellCall('c3', "apply_patch <<'EOF'\n*** Begin Patch\n*** End Patch\nEOF"),
+      shellOut('c3', 0),
+      shellCall('c4', 'npm test'),
+      shellOut('c4', 0),
+      say('assistant', 'All tests pass.'),
+    ]);
+    const out: ClaimRecord[] = [];
+    const stats = { editTurns: 0 };
+    await scanCodexSession(file, {}, out, stats);
+    expect(stats.editTurns).toBe(2);
+    expect(out.map((c) => [c.verdict, c.project, c.at.slice(0, 10)])).toEqual([
+      ['FAILED', '/work/v0', '2025-08-09'],
+      ['VERIFIED', '/work/v0', '2025-08-09'],
+    ]);
+    const projects = join(dir, 'projects');
+    mkdirSync(projects, { recursive: true });
+    const r = await scanHistory({ projectsDir: projects, codexDir: dir });
+    expect(r.byAgent.codex).toEqual({ sessions: 1, claims: 2, verified: 1 });
+  });
+
+  it('thread_rolled_back retracts the claims of the last N turns in both layouts', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'isitdone-codex-'));
+    const legacy = write('sessions/2026/09/05/rollout-2026-09-05T10-00-00-thread-5.jsonl', [
+      meta('/work/app5'),
+      user('one'),
+      patch(),
+      exec('c1', 'npm test'),
+      output('c1', 0),
+      assistant('Done, tests pass.'),
+      user('two'),
+      patch(),
+      assistant('Done.'),
+      line('event_msg', { type: 'thread_rolled_back', num_turns: 1 }),
+      user('three'),
+      patch(),
+      exec('c3', 'npm test'),
+      output('c3', 1),
+      assistant('Done.'),
+    ]);
+    const out: ClaimRecord[] = [];
+    const stats = { editTurns: 0 };
+    await scanCodexSession(legacy, {}, out, stats);
+    expect(stats.editTurns).toBe(2);
+    expect(out.map((c) => c.verdict)).toEqual(['VERIFIED', 'FAILED']);
+
+    const item = (item: Rec): Rec => line('event_msg', { type: 'item_completed', thread_id: 'thread-6', turn_id: 'turn', item });
+    const paginated = write('sessions/2026/09/06/rollout-2026-09-06T10-00-00-thread-6.jsonl', [
+      meta('/work/app6'),
+      line('event_msg', { type: 'turn_started', turn_id: 't1' }),
+      item({ type: 'FileChange', id: 'f1', changes: {}, status: 'completed' }),
+      line('event_msg', { type: 'turn_complete', turn_id: 't1', last_agent_message: 'Done.' }),
+      // a turn that was interrupted before anything happened still counts as a turn
+      line('event_msg', { type: 'turn_started', turn_id: 't2' }),
+      line('event_msg', { type: 'turn_aborted', turn_id: 't2', reason: 'interrupted' }),
+      line('event_msg', { type: 'turn_started', turn_id: 't3' }),
+      item({ type: 'FileChange', id: 'f3', changes: {}, status: 'completed' }),
+      line('event_msg', { type: 'turn_complete', turn_id: 't3', last_agent_message: 'All done.' }),
+      line('event_msg', { type: 'thread_rolled_back', num_turns: 2 }),
+      line('event_msg', { type: 'turn_started', turn_id: 't4' }),
+      item({ type: 'FileChange', id: 'f4', changes: {}, status: 'completed' }),
+      item({ type: 'CommandExecution', id: 'c4', command: ['bash', '-lc', 'npm test'], status: 'completed', exit_code: 0 }),
+      line('event_msg', { type: 'turn_complete', turn_id: 't4', last_agent_message: 'Done, tests pass.' }),
+    ]);
+    const out2: ClaimRecord[] = [];
+    const stats2 = { editTurns: 0 };
+    await scanCodexSession(paginated, {}, out2, stats2);
+    expect(stats2.editTurns).toBe(2);
+    expect(out2.map((c) => [c.verdict, c.claim])).toEqual([
+      ['NEVER_RAN', 'Done.'],
+      ['VERIFIED', 'Done, tests pass.'],
+    ]);
+  });
 });
