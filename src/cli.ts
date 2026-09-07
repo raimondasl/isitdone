@@ -27,7 +27,8 @@ Usage
   ${NPX} doctor               prove the hook fires and blocks
   ${NPX} receipt              show whether the current tree has a PASS receipt
   ${NPX} detect               show which checks would run
-  ${NPX} hook --host <name>   (used by the agent) read the Stop payload on stdin, block if needed
+  ${NPX} hook --host <name>   (used by the agent) read the Stop payload on stdin, block if needed;
+                          <name> is one of ${HOST_NAMES.join(', ')}
   ${NPX} uninstall            remove the hook(s)
   ${NPX} history              how many of your agent's past "done" claims had a test run behind them
   ${NPX} update               refresh the npx-cached hook to the latest release (--check only reports)
@@ -54,7 +55,9 @@ Options for history  (reads Claude Code, Codex, Gemini CLI, Qwen Code and Cursor
   --include-subagents     also scan subagent transcripts
 
 Options for init
-  --agent <name>          claude | codex | cursor | gemini | all | auto (default: auto)
+  --agent <name>          ${HOST_NAMES.join(' | ')} | all | auto
+                          (default: auto = every agent with a settings dir in the repo; comma-separate to name several;
+                          opencode gets a plugin file instead of a hook entry, junie is user-level only)
   --user                  install into the user-level settings instead of the project
   --timeout <seconds>     hook timeout (default: sized to the detected checks, at least 600)
   --command "<cmd>"       hook command to register (default: npx -y ${PACKAGE_NAME} hook --host <name>); it must
@@ -393,9 +396,11 @@ async function cmdInit(args: Args): Promise<number> {
     out(`  profile    ${config.profile ?? 'claim-gated'}  ${s.dim('(lite checks on every stop, full checks when the agent claims done)')}`);
     if (gi === 'added') out(`  gitignore  added .isitdone/`);
   }
+  const nameWidth = Math.max(12, ...results.map((r) => r.displayName.length + 1));
   for (const r of results) {
-    const verb = r.action === 'added' ? s.green('added') : r.action === 'updated' ? s.cyan('updated') : r.action === 'removed' ? s.yellow('removed') : s.dim(r.action);
-    out(`  ${r.displayName.padEnd(12)}${verb.padEnd(r.action.length + 10)} ${s.dim(`${r.hostEvent.padEnd(12)} ${r.path}${r.action === 'added' || r.action === 'updated' ? ` (timeout ${r.timeout}s)` : ''}`)}`);
+    const verb = r.action === 'added' ? s.green('added') : r.action === 'updated' ? s.cyan('updated') : r.action === 'removed' ? s.yellow('removed') : r.action === 'skipped' ? s.yellow('skipped') : s.dim(r.action);
+    // pad on the visible text, not the coloured string
+    out(`  ${r.displayName.padEnd(nameWidth)}${verb}${' '.repeat(Math.max(1, 11 - r.action.length))}${s.dim(`${r.hostEvent.padEnd(18)} ${r.path}${r.action === 'added' || r.action === 'updated' ? ` (timeout ${r.timeout}s)` : ''}`)}`);
   }
   const notes = results.filter((r) => r.note && r.action !== 'removed' && r.action !== 'absent');
   for (const r of notes) out(`  ${s.dim('note:')} ${r.note}`);
