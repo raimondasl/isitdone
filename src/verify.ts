@@ -1,7 +1,9 @@
 import { join } from 'node:path';
 import type { IsitdoneConfig } from './config.js';
 import { detectChecks, type Check, type Detection } from './detect.js';
+import { collectDiff, readAtBase, readNow } from './diff.js';
 import { gitInfo, type GitInfo } from './git.js';
+import { scanIntegrity, type IntegrityReport } from './integrity.js';
 import { configHash, evaluateReceipt, writeReceipt, type Receipt, type ReceiptEvaluation } from './receipt.js';
 import { childEnv, runCheck, type RunResult } from './run.js';
 
@@ -22,6 +24,10 @@ export interface VerifyOptions {
   useCache?: boolean;
   /** Run the checks but do not write a receipt (doctor mode). */
   dryRun?: boolean;
+  /** Ref to diff against for the integrity scan. Default HEAD (the working tree's uncommitted changes). */
+  base?: string;
+  /** CI mode for the integrity scan: new suppressions are findings. */
+  ci?: boolean;
   onCheckStart?: (check: Check) => void;
   onCheckDone?: (result: RunResult) => void;
   onOutput?: (check: Check, chunk: string) => void;
@@ -48,6 +54,31 @@ export interface VerifyResult {
   claim: string | null;
   /** Non-fatal problems (e.g. the receipt could not be written). */
   warnings: string[];
+  /** Test-integrity scan of the change set (null when disabled or not a git repo). */
+  integrity: IntegrityReport | null;
+  /** Integrity mode that applied. */
+  integrityMode: 'warn' | 'strict' | 'off';
+}
+
+/** Scan the change set for weakened tests. Never throws; a scan failure becomes a warning. */
+export function runIntegrity(git: GitInfo, opts: { base?: string; ci?: boolean }, warnings: string[]): IntegrityReport | null {
+  if (!git.isRepo) return null;
+  const base = opts.base ?? 'HEAD';
+  const diff = collectDiff(git.root, base);
+  if (diff.error) {
+    warnings.push(`integrity scan skipped: ${diff.error}`);
+    return null;
+  }
+  try {
+    return scanIntegrity(diff.files, {
+      readBefore: (p) => readAtBase(git.root, p, base),
+      readAfter: (p) => readNow(git.root, p),
+      ci: opts.ci ?? false,
+    });
+  } catch (err) {
+    warnings.push(`integrity scan failed: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 export const DEFAULT_TIMEOUT_S = 120;
@@ -81,8 +112,10 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const claim = opts.claim ?? null;
   const warnings: string[] = [];
   if (git.treeError) warnings.push(`working tree could not be hashed (${git.treeError}); receipts cannot be cached`);
+  const integrityMode = opts.config.integrity ?? 'warn';
+  const integrity = integrityMode === 'off' ? null : runIntegrity(git, { base: opts.base, ci: opts.ci }, warnings);
 
-  const base = { git, detection, profile: opts.profile, before, claim, warnings };
+  const base = { git, detection, profile: opts.profile, before, claim, warnings, integrity, integrityMode };
 
   if ((opts.useCache ?? true) && receiptSatisfies(before, opts.profile)) {
     return { ...base, ok: true, ran: [], skipped: [], receipt: before.receipt, cached: true, durationMs: Date.now() - started };
@@ -139,6 +172,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
         checks: ran,
         claim,
         host: opts.host ?? null,
+        integrity: integrity ? { findings: integrity.findings, summary: integrity.summary, base: opts.base ?? 'HEAD' } : null,
       });
     } catch (err) {
       warnings.push(`receipt could not be written: ${(err as Error).message}`);

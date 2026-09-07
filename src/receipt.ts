@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 
 import { join } from 'node:path';
 import { readTextFile, writeFileAtomic } from './fsutil.js';
 import { RECEIPT_DIR, type GitInfo } from './git.js';
+import type { Finding, IntegritySummary } from './integrity.js';
 import type { RunResult } from './run.js';
 import { VERSION } from './version.js';
 
@@ -27,6 +28,8 @@ export interface Receipt {
   checks: RunResult[];
   claim: string | null;
   host: string | null;
+  /** Test-integrity scan of the change set, when it ran. */
+  integrity?: { findings: Finding[]; summary: IntegritySummary; base: string } | null;
   hmac?: string;
 }
 

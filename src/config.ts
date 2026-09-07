@@ -31,6 +31,13 @@ export interface IsitdoneConfig {
   claimPatterns?: string[];
   /** Include the build script as a check even when test/typecheck exist. Default false. */
   build?: boolean;
+  /** Test-integrity scan: warn (default) reports weakened tests, strict blocks on high/critical findings, off disables it. */
+  integrity?: 'warn' | 'strict' | 'off';
+  /** Settings for `isitdone history`. */
+  history?: {
+    /** Case-insensitive substrings of project paths to skip. */
+    exclude?: string[];
+  };
 }
 
 export interface LoadedConfig {
@@ -88,6 +95,15 @@ function validate(c: IsitdoneConfig, where: string): IsitdoneConfig {
   }
   if (c.claimPatterns !== undefined && (!Array.isArray(c.claimPatterns) || c.claimPatterns.some((p) => typeof p !== 'string'))) {
     throw new Error(`${where}: claimPatterns must be an array of strings`);
+  }
+  if (c.integrity !== undefined && !['warn', 'strict', 'off'].includes(c.integrity)) {
+    throw new Error(`${where}: integrity must be one of warn, strict, off`);
+  }
+  if (c.history !== undefined) {
+    if (typeof c.history !== 'object' || c.history === null) throw new Error(`${where}: history must be an object`);
+    if (c.history.exclude !== undefined && (!Array.isArray(c.history.exclude) || c.history.exclude.some((p) => typeof p !== 'string'))) {
+      throw new Error(`${where}: history.exclude must be an array of strings`);
+    }
   }
   return c;
 }

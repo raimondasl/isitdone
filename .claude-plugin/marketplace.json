@@ -1,0 +1,18 @@
+{
+  "name": "isitdone",
+  "owner": {
+    "name": "raimondasl",
+    "url": "https://github.com/raimondasl/isitdone"
+  },
+  "plugins": [
+    {
+      "name": "isitdone",
+      "source": "./",
+      "description": "Don't let Claude say \"done\" until the tests actually pass: a Stop hook that runs the repo's real test/typecheck/lint commands and blocks the turn until they pass, plus a skill that teaches Claude to verify before claiming completion.",
+      "version": "0.2.0",
+      "author": {
+        "name": "raimondasl"
+      }
+    }
+  ]
+}

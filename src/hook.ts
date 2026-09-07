@@ -8,7 +8,7 @@ import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
 import { findRoot, RECEIPT_DIR } from './git.js';
 import { getHost, type HookInput, type HostAdapter } from './hosts.js';
 import { ensureStateDir } from './receipt.js';
-import { formatBlockReason } from './report.js';
+import { formatBlockReason, integrityBlocks } from './report.js';
 import { verify, type ResolvedProfile, type VerifyResult } from './verify.js';
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -212,9 +212,15 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     lastTree: result.git.tree,
     updatedAt: new Date().toISOString(),
   });
-  const warn = result.warnings.length ? `isitdone: ${result.warnings.join('; ')}` : undefined;
+  const notes = [...result.warnings];
+  const it = result.integrity;
+  const weakened = it ? it.findings.filter((f) => !f.suppressed) : [];
+  if (result.ok && weakened.length > 0 && !integrityBlocks(result)) {
+    notes.push(`the change weakened tests (${weakened.length} finding${weakened.length === 1 ? '' : 's'}: ${weakened.slice(0, 3).map((f) => f.message).join('; ')}); run \`npx isitdone\` for details`);
+  }
+  const warn = notes.length ? `isitdone: ${notes.join('; ')}` : undefined;
 
-  if (result.ok) {
+  if (result.ok && !integrityBlocks(result)) {
     if (!doctor) writeState(root, state(0));
     return allow(`${result.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, result, 0);
   }

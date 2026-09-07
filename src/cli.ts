@@ -6,9 +6,10 @@ import { findRoot, gitInfo } from './git.js';
 import { readStdin, runHook } from './hook.js';
 import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
+import { parseSince, scanHistory, type HistoryReport } from './history.js';
 import { formatDuration, styleFor } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
-import { formatMarkdown, formatReport, toJson } from './report.js';
+import { formatMarkdown, formatReport, integrityBlocks, toJson } from './report.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
 
@@ -25,6 +26,7 @@ Usage
   ${NPX} detect               show which checks would run
   ${NPX} hook --host <name>   (used by the agent) read the Stop payload on stdin, block if needed
   ${NPX} uninstall            remove the hook(s)
+  ${NPX} history              how many of your agent's past "done" claims had a test run behind them
 
 Options for run
   --profile <lite|full>   lite = typecheck+lint only, full = everything (default: full)
@@ -32,6 +34,17 @@ Options for run
   --no-cache              re-run even if a PASS receipt exists for this exact tree
   --json                  machine-readable output (done: true|false)
   --claim "<text>"        record the completion claim being verified
+  --base <ref>            diff against <ref> for the test-integrity scan (default: HEAD)
+  --strict                block when the change weakened tests (high/critical findings)
+  --ci                    strict, and new "isitdone: allow" suppressions count as findings
+
+Options for history
+  --since <30d|2w|2026-01-01>   only sessions after this point
+  --exclude <substring>   skip projects whose path contains this (repeatable; also .isitdone.json history.exclude)
+  --verbose               list every claim with its verdict
+  --min <pct>             exit 1 if fewer than <pct>% of claims were verified
+  --json                  machine-readable
+  --include-subagents     also scan subagent transcripts
 
 Options for init
   --agent <name>          claude | codex | cursor | gemini | all | auto (default: auto)
@@ -56,25 +69,35 @@ Config: .isitdone.json or "isitdone" in package.json. Docs: https://github.com/r
 
 interface Args {
   command: string;
-  flags: Record<string, string | boolean>;
+  flags: Record<string, string | boolean | string[]>;
   rest: string[];
 }
 
-const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd']);
-const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help']);
+const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min']);
+const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents']);
+/** Flags that may repeat; collected as arrays. */
+const MULTI_FLAGS = new Set(['exclude']);
 
 function parseArgs(argv: string[]): Args {
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, string | boolean | string[]> = {};
   const rest: string[] = [];
+  const setValue = (key: string, value: string) => {
+    if (MULTI_FLAGS.has(key)) {
+      const prev = flags[key];
+      flags[key] = Array.isArray(prev) ? [...prev, value] : [value];
+    } else {
+      flags[key] = value;
+    }
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       const key = eq >= 0 ? a.slice(2, eq) : a.slice(2);
       if (eq >= 0) {
-        flags[key] = a.slice(eq + 1);
+        setValue(key, a.slice(eq + 1));
       } else if (VALUE_FLAGS.has(key) && i + 1 < argv.length && !(argv[i + 1] as string).startsWith('--')) {
-        flags[key] = argv[++i] as string;
+        setValue(key, argv[++i] as string);
       } else if (key.startsWith('no-')) {
         flags[key.slice(3)] = false;
       } else {
@@ -124,21 +147,99 @@ async function cmdRun(args: Args): Promise<number> {
   const json = args.flags.json === true;
   const s = styleFor(process.stdout);
   const live = !json && Boolean(process.stdout.isTTY);
+  const ci = args.flags.ci === true;
+  const strict = ci || args.flags.strict === true;
   const res = await verify({
     root,
-    config,
+    config: strict ? { ...config, integrity: 'strict' } : config,
     profile,
     claim: typeof args.flags.claim === 'string' ? args.flags.claim : null,
     host: typeof args.flags.host === 'string' ? args.flags.host : null,
     all: args.flags.all === true,
     useCache: args.flags.cache !== false,
+    base: typeof args.flags.base === 'string' ? args.flags.base : undefined,
+    ci,
     onCheckStart: live ? (c) => process.stdout.write(s.dim(`  running ${c.cmd} ...`)) : undefined,
     onCheckDone: live ? () => process.stdout.write(`\r${' '.repeat(70)}\r`) : undefined,
   });
   const state = res.receipt ? (res.receipt.status === 'PASS' ? 'PASS' : 'FAIL') : res.cached ? 'PASS' : 'NONE';
   if (json) out(JSON.stringify(toJson(res, state), null, 2));
   else out(formatReport(res, s));
-  return res.ok ? 0 : 1;
+  return res.ok && !integrityBlocks(res) ? 0 : 1;
+}
+
+function pct(n: number, total: number): string {
+  return total === 0 ? '-' : `${Math.round((100 * n) / total)}%`;
+}
+
+async function cmdHistory(args: Args): Promise<number> {
+  const root = repoRoot(args.flags);
+  let configExclude: string[] = [];
+  try {
+    configExclude = loadConfig(root).config.history?.exclude ?? [];
+  } catch {
+    // config problems are reported by run/doctor
+  }
+  const flagExclude = Array.isArray(args.flags.exclude) ? args.flags.exclude : typeof args.flags.exclude === 'string' ? [args.flags.exclude] : [];
+  const sinceRaw = typeof args.flags.since === 'string' ? args.flags.since : null;
+  const since = sinceRaw ? parseSince(sinceRaw) : null;
+  if (sinceRaw && !since) {
+    err(`--since must look like 30d, 2w, 12h or an ISO date (got ${sinceRaw})`);
+    return 3;
+  }
+  const min = typeof args.flags.min === 'string' ? Number(args.flags.min) : null;
+  if (min !== null && !(min >= 0 && min <= 100)) {
+    err('--min must be a percentage between 0 and 100');
+    return 3;
+  }
+  const json = args.flags.json === true;
+  const s = styleFor(process.stdout);
+  const live = !json && Boolean(process.stdout.isTTY);
+  const report: HistoryReport = await scanHistory({
+    since,
+    exclude: [...configExclude, ...flagExclude],
+    includeSubagents: args.flags['include-subagents'] === true,
+    onProgress: live ? (done, total) => process.stdout.write(`\r  scanning ${done}/${total} sessions ...`) : undefined,
+  });
+  if (live) process.stdout.write(`\r${' '.repeat(50)}\r`);
+  const total = report.claims.length;
+  const verified = report.counts.VERIFIED;
+  if (json) {
+    out(JSON.stringify({ ...report, claims: args.flags.verbose === true ? report.claims : undefined }, null, 2));
+  } else {
+    out(`${s.bold('isitdone history')}  ${s.dim(report.projectsDir)}${report.since ? s.dim(`  since ${report.since.slice(0, 10)}`) : ''}`);
+    out(`  scanned ${report.scannedFiles} session${report.scannedFiles === 1 ? '' : 's'} in ${report.byProject.length || 'no'} project${report.byProject.length === 1 ? '' : 's'}; ${report.editTurns} turns edited files; ${total} of those ended with a completion claim${report.excludedDirs.length ? s.dim(`; ${report.excludedDirs.length} project dir${report.excludedDirs.length === 1 ? '' : 's'} excluded`) : ''}`);
+    if (total === 0) {
+      out(`  ${s.yellow('no completion claims found')}  ${s.dim('(no Claude Code transcripts under this directory, or none with file edits)')}`);
+      return 0;
+    }
+    out('');
+    out(`  ${s.green('VERIFIED')}   ${pad(pct(verified, total), 5)} a test command passed after the last edit`);
+    out(`  ${s.yellow('STALE')}      ${pad(pct(report.counts.STALE, total), 5)} tests passed, then more edits, no re-run`);
+    out(`  ${s.red('FAILED')}     ${pad(pct(report.counts.FAILED, total), 5)} the last test run failed, "done" claimed anyway`);
+    out(`  ${s.red('NEVER RAN')}  ${pad(pct(report.counts.NEVER_RAN, total), 5)} no test command in the turn at all`);
+    out('');
+    out(`  ${s.bold(`${report.unbackedPct}% of "done" claims had no passing test run behind them.`)}`);
+    const worst = [...report.byProject].filter((p) => p.claims >= 5).sort((a, b) => b.unbackedPct - a.unbackedPct)[0];
+    if (worst) out(`  worst project  ${worst.project}  ${worst.unbackedPct}% unbacked (${worst.claims} claims)`);
+    if (args.flags.verbose === true) {
+      out('');
+      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}`);
+    } else {
+      out('');
+      out(`  ${s.dim('per project:')}`);
+      for (const p of report.byProject.slice(0, 10)) out(`  ${pad(pct(p.verified, p.claims), 5)} verified  ${pad(String(p.claims), 4)} claims  ${s.dim(p.project)}`);
+      if (report.byProject.length > 10) out(`  ${s.dim(`... ${report.byProject.length - 10} more`)}`);
+    }
+    out('');
+    out(`  ${s.dim('make the agent prove it:')}  ${NPX} init`);
+  }
+  if (min !== null && total > 0 && Math.round((100 * verified) / total) < min) return 1;
+  return 0;
+}
+
+function pad(s: string, width: number): string {
+  return s.length >= width ? s : s + ' '.repeat(width - s.length);
 }
 
 async function cmdReceipt(args: Args): Promise<number> {
@@ -332,6 +433,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdInit(args);
       case 'doctor':
         return await cmdDoctor(args);
+      case 'history':
+        return await cmdHistory(args);
       default:
         err(`isitdone: unknown command "${args.command}"\n`);
         err(HELP);
