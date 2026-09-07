@@ -17,3 +17,17 @@ await build({
   define: { __VERSION__: JSON.stringify(pkg.version) },
   logLevel: 'info',
 });
+
+await build({
+  entryPoints: ['src/index.ts'],
+  outfile: 'dist/index.js',
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  minify: false,
+  sourcemap: false,
+  legalComments: 'none',
+  define: { __VERSION__: JSON.stringify(pkg.version) },
+  logLevel: 'info',
+});

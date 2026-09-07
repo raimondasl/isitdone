@@ -3,6 +3,7 @@
   "version": "0.2.1",
   "description": "Don't let your coding agent say \"done\" until the tests actually pass. Zero-LLM Stop hook + CLI for Claude Code, Codex, Cursor and Gemini CLI.",
   "type": "module",
+  "main": "dist/index.js",
   "bin": {
     "isitdone": "dist/isitdone.js"
   },
@@ -19,7 +20,8 @@
     "build": "node scripts/build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "bench": "node scripts/bench.mjs"
   },
   "keywords": [
     "claude-code",

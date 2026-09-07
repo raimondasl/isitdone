@@ -1,4 +1,4 @@
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { gitInfo, workingTreeHash } from '../src/git.js';
@@ -67,6 +67,33 @@ describe('gitInfo / workingTreeHash', () => {
     expect(() => repo!.git('cat-file', '-e', blob)).toThrow();
     expect(count() - before).toBeLessThanOrEqual(1);
     expect(g.tree).toHaveLength(40);
+  });
+
+  it('sees edits inside embedded repositories and submodules', () => {
+    repo = tempRepo({ files: { 'a.txt': 'a\n' } });
+    const clean = gitInfo(repo.root).tree;
+    // an embedded (untracked) repository
+    const inner = tempRepo({ files: { 'lib.txt': 'v1\n' } });
+    try {
+      const target = join(repo.root, 'vendor', 'inner');
+      mkdirSync(join(repo.root, 'vendor'), { recursive: true });
+      cpSync(inner.root, target, { recursive: true });
+      const withInner = gitInfo(repo.root).tree;
+      expect(withInner).not.toBe(clean);
+      writeFileSync(join(target, 'lib.txt'), 'v2\n');
+      const edited = gitInfo(repo.root).tree;
+      expect(edited).not.toBe(withInner);
+      writeFileSync(join(target, 'lib.txt'), 'v1\n');
+      expect(gitInfo(repo.root).tree).toBe(withInner);
+      // a real submodule
+      repo.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', inner.root.replace(/\\/g, '/'), 'sub');
+      repo.commit('add submodule');
+      const withSub = gitInfo(repo.root).tree;
+      writeFileSync(join(repo.root, 'sub', 'lib.txt'), 'changed inside submodule\n');
+      expect(gitInfo(repo.root).tree).not.toBe(withSub);
+    } finally {
+      inner.cleanup();
+    }
   });
 
   it('does not touch the real index', () => {

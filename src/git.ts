@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -71,7 +72,22 @@ export function workingTreeHash(top: string): { tree: string | null; error: stri
     if (!others.ok) return { tree: null, error: `git ls-files failed: ${others.stderr}` };
     const changed = git(['ls-files', '-z', '--modified', '--deleted', '--', '.', exclude], top, env);
     if (!changed.ok) return { tree: null, error: `git ls-files failed: ${changed.stderr}` };
-    const paths = new Set([...others.stdout.split('\0'), ...changed.stdout.split('\0')].filter((p) => p !== ''));
+    // Submodules (gitlinks in the index) and embedded repositories (untracked "dir/" entries) are hashed recursively.
+    const stage = git(['ls-files', '-z', '--stage'], top, env);
+    const gitlinks = new Set(
+      (stage.ok ? stage.stdout : '')
+        .split('\0')
+        .filter((l) => l.startsWith('160000 '))
+        .map((l) => l.split('\t')[1] ?? '')
+        .filter(Boolean),
+    );
+    const nested: string[] = [];
+    const paths = new Set<string>();
+    for (const p of [...others.stdout.split('\0'), ...changed.stdout.split('\0')]) {
+      if (p === '') continue;
+      if (p.endsWith('/')) nested.push(p.slice(0, -1)); // an embedded repo shows up as "dir/"
+      else if (!gitlinks.has(p)) paths.add(p);
+    }
     if (paths.size > 0) {
       // --info-only: record object ids in the temp index without creating objects.
       const upd = git(['update-index', '--info-only', '--add', '--remove', '-z', '--stdin'], top, env, [...paths].join('\0') + '\0');
@@ -79,7 +95,15 @@ export function workingTreeHash(top: string): { tree: string | null; error: stri
     }
     const wt = git(['write-tree', '--missing-ok'], top, env);
     if (!wt.ok) return { tree: null, error: `git write-tree failed: ${wt.stderr}` };
-    return { tree: wt.stdout.trim(), error: null };
+    const inner = [...gitlinks, ...nested].sort();
+    if (inner.length === 0) return { tree: wt.stdout.trim(), error: null };
+    const h = createHash('sha1').update(wt.stdout.trim());
+    for (const path of inner) {
+      const sub = workingTreeHash(join(top, path));
+      if (sub.error) return { tree: null, error: `submodule ${path}: ${sub.error}` };
+      h.update('\0').update(path).update('\0').update(sub.tree ?? 'unknown');
+    }
+    return { tree: h.digest('hex'), error: null };
   } catch (err) {
     return { tree: null, error: (err as Error).message };
   } finally {

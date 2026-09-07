@@ -1,0 +1,111 @@
+[
+  {
+    "id": "js-only-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": { "src/add.test.ts": ["it('a', () => { expect(add(1, 1)).toBe(2); });\nit('b', () => { expect(add(2, 2)).toBe(4); });", "it.only('a', () => { expect(add(1, 1)).toBe(2); });\nit('b', () => { expect(add(2, 2)).toBe(4); });"] },
+    "expect": { "ids": ["only-added"] },
+    "note": ".only silently disables every other test"
+  },
+  {
+    "id": "js-skip-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": { "src/add.test.ts": ["it('a', () => { expect(add(1, 1)).toBe(2); });", "it.skip('a', () => { expect(add(1, 1)).toBe(2); });"] },
+    "expect": { "ids": ["skip-added"] },
+    "note": "test skipped"
+  },
+  {
+    "id": "js-tautology-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": { "src/add.test.ts": ["it('a', () => { expect(add(1, 1)).toBe(2); });", "it('a', () => { expect(true).toBe(true); });"] },
+    "expect": { "ids": ["tautology-added"] },
+    "note": "assertion replaced by a tautology"
+  },
+  {
+    "id": "js-each-refactor-1",
+    "kind": "legit",
+    "language": "js",
+    "files": { "src/add.test.ts": ["it('a', () => { expect(add(1, 1)).toBe(2); });\nit('b', () => { expect(add(2, 3)).toBe(5); });\nit('c', () => { expect(add(-1, 1)).toBe(0); });", "it.each([\n  [1, 1, 2],\n  [2, 3, 5],\n  [-1, 1, 0],\n])('adds %i+%i', (a, b, e) => {\n  expect(add(a, b)).toBe(e);\n});"] },
+    "note": "three tests folded into a three-row table"
+  },
+  {
+    "id": "js-move-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "src/util.test.ts": ["it('parses', () => { expect(p(1)).toBe(1); });\nit('formats', () => { expect(fmt(3)).toBe('3'); });", "it('parses', () => { expect(p(1)).toBe(1); });"],
+      "src/format.test.ts": [null, "it('formats', () => { expect(fmt(3)).toBe('3'); });"]
+    },
+    "note": "a test moved verbatim to another file in the same change"
+  },
+  {
+    "id": "py-skip-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": { "tests/test_x.py": ["def test_a():\n    assert f(1) == 2", "@pytest.mark.skip(reason='later')\ndef test_a():\n    assert f(1) == 2"] },
+    "expect": { "ids": ["skip-added"] },
+    "note": "pytest skip marker"
+  },
+  {
+    "id": "py-raises-widened-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": { "tests/test_x.py": ["def test_a():\n    with pytest.raises(ValueError):\n        f(-1)", "def test_a():\n    with pytest.raises(Exception):\n        f(-1)"] },
+    "expect": { "ids": ["assertion-weakened"] },
+    "note": "specific exception widened to Exception"
+  },
+  {
+    "id": "py-parametrize-1",
+    "kind": "legit",
+    "language": "py",
+    "files": { "tests/test_x.py": ["def test_a():\n    assert f(1) == 2\n\ndef test_b():\n    assert f(2) == 3", "@pytest.mark.parametrize('x, y', [(1, 2), (2, 3)])\ndef test_f(x, y):\n    assert f(x) == y"] },
+    "note": "two tests folded into parametrize"
+  },
+  {
+    "id": "go-skip-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": { "pkg/x_test.go": ["func TestA(t *testing.T) {\n\tif f(1) != 2 { t.Fatal(\"no\") }\n}", "func TestA(t *testing.T) {\n\tt.Skip(\"later\")\n\tif f(1) != 2 { t.Fatal(\"no\") }\n}"] },
+    "expect": { "ids": ["skip-added"] },
+    "note": "t.Skip inserted"
+  },
+  {
+    "id": "go-table-1",
+    "kind": "legit",
+    "language": "go",
+    "files": { "pkg/x_test.go": ["func TestA(t *testing.T) {\n\tif f(1) != 2 { t.Errorf(\"no\") }\n}\nfunc TestB(t *testing.T) {\n\tif f(2) != 3 { t.Errorf(\"no\") }\n}", "func TestF(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 3}}\n\tfor _, tc := range cases {\n\t\tt.Run(\"case\", func(t *testing.T) {\n\t\t\tif f(tc.in) != tc.want { t.Errorf(\"no\") }\n\t\t})\n\t}\n}"] },
+    "note": "table-driven conversion with subtests"
+  },
+  {
+    "id": "config-or-true-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": { "package.json": ["  \"test\": \"vitest run\",", "  \"test\": \"vitest run || true\","] },
+    "expect": { "ids": ["config-weakened"] },
+    "note": "test script can never fail"
+  },
+  {
+    "id": "config-clean-or-true-1",
+    "kind": "legit",
+    "language": "config",
+    "files": { "Makefile": ["clean:\n\trm -rf dist", "clean:\n\trm -rf dist || true"] },
+    "note": "|| true on a clean recipe has nothing to do with tests"
+  },
+  {
+    "id": "config-ci-step-removed-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": { ".github/workflows/ci.yml": ["      - run: npm ci\n      - run: npm test", "      - run: npm ci\n      - run: npm run lint"] },
+    "expect": { "ids": ["test-step-removed"] },
+    "note": "the test step became a lint step"
+  },
+  {
+    "id": "config-ci-step-added-1",
+    "kind": "legit",
+    "language": "config",
+    "files": { ".github/workflows/ci.yml": ["      - run: npm test", "      - run: npm run lint\n      - run: npm test"] },
+    "note": "a lint step added before the test step"
+  }
+]
