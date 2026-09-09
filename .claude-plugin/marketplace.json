@@ -1,5 +1,6 @@
 {
   "name": "isitdone",
+  "description": "The isitdone plugin: a Stop hook that runs the repository's real tests, typecheck and lint before Claude may claim the work is done, plus the isitdone skill.",
   "owner": {
     "name": "raimondasl",
     "url": "https://github.com/raimondasl/isitdone"
