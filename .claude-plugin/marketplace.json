@@ -9,7 +9,7 @@
       "name": "isitdone",
       "source": "./",
       "description": "Don't let Claude say \"done\" until the tests actually pass: a Stop hook that runs the repo's real test/typecheck/lint commands and blocks the turn until they pass, plus a skill that teaches Claude to verify before claiming completion.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "author": {
         "name": "raimondasl"
       }

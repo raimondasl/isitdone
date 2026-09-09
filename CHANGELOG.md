@@ -4,6 +4,12 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-09
+
+### Changed
+
+- Action description shortened to the Marketplace limit (125 characters); no functional change.
+
 ## [0.4.0] - 2026-09-07
 
 ### Added
