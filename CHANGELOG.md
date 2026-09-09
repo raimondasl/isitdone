@@ -4,6 +4,14 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- `history` (Qwen Code): a `/rewind` leaves the truncated branch in the session file; only the live `parentUuid` chain is graded now, so rewound claims no longer count.
+
+### Added
+
+- Issue templates for host hook reports, scanner mistakes and bugs; GitHub Discussions enabled.
+
 ## [0.4.1] - 2026-09-09
 
 ### Changed

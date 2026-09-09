@@ -251,6 +251,25 @@ describe('Qwen Code sessions', () => {
     ]);
   });
 
+  it('a /rewind leaves the truncated branch in the file; only the live parentUuid chain is graded', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'isitdone-qwen-'));
+    const one = [qUser('one'), qAssistant([qEditCall('e1')]), qEditResult('e1'), qAssistant([{ text: 'Done.' }])];
+    const two = [qUser('two'), qAssistant([qEditCall('e2')]), qEditResult('e2'), qAssistant([{ text: 'Implemented, done.' }])];
+    // rewind to before turn two: the next record is parented to the last record of turn one
+    parent = one[3]?.uuid as string;
+    const rewind = qRec('system', { subtype: 'rewind', provenance: 'system', systemPayload: { truncatedCount: two.length } });
+    const three = [qUser('three'), qAssistant([qEditCall('e3')]), qEditResult('e3'), qAssistant([qShellCall('s3', 'npm test')]), qResult('s3', 'run_shell_command', legacyOut('npm test', 'ok', 0)), qAssistant([{ text: 'Done, tests pass.' }])];
+    const file = write('qwen/projects/c--users-me-app/chats/0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5.jsonl', jsonl([...one, ...two, rewind, ...three]));
+    const out: ClaimRecord[] = [];
+    const stats = { editTurns: 0 };
+    await scanQwenSession(file, {}, { label: 'qwen:c--users-me-app', sawCwd: () => {} }, out, stats);
+    expect(out.map((c) => [c.verdict, c.claim])).toEqual([
+      ['NEVER_RAN', 'Done.'],
+      ['VERIFIED', 'Done, tests pass.'],
+    ]);
+    expect(stats.editTurns).toBe(2);
+  });
+
   it('finds session files (not sidecars) and history merges Gemini and Qwen with exclusions and since', async () => {
     dir = mkdtempSync(join(tmpdir(), 'isitdone-qwen-'));
     const qwen = join(dir, 'qwen');

@@ -324,14 +324,30 @@ export async function scanQwenSession(file: string, opts: { since?: Date | null;
   const turn = new TurnTracker({ project: () => cwd ?? project.label, session, agent: 'qwen', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
   /** Edit tool calls awaiting their tool_result (call id -> tool name). */
   const edits = new Map<string, string>();
+  const recs: Rec[] = [];
   for (const line of await readLines(file)) {
     if (!line.startsWith('{')) continue;
-    let j: Rec;
     try {
-      j = JSON.parse(line) as Rec;
+      recs.push(JSON.parse(line) as Rec);
     } catch {
-      continue;
+      // a torn line
     }
+  }
+  // /rewind appends {type:'system', subtype:'rewind'} and re-parents the records that follow to an earlier uuid; the
+  // truncated branch stays in the file, so only the parentUuid chain reachable from the last record is live history.
+  let live: Set<string> | null = null;
+  if (recs.some((r) => r.subtype === 'rewind')) {
+    const byUuid = new Map<string, Rec>();
+    for (const r of recs) if (typeof r.uuid === 'string') byUuid.set(r.uuid, r);
+    live = new Set();
+    let cur: Rec | undefined = recs[recs.length - 1];
+    while (cur && typeof cur.uuid === 'string' && !live.has(cur.uuid)) {
+      live.add(cur.uuid);
+      cur = typeof cur.parentUuid === 'string' ? byUuid.get(cur.parentUuid) : undefined;
+    }
+  }
+  for (const j of recs) {
+    if (live && typeof j.uuid === 'string' && !live.has(j.uuid)) continue;
     if (j.isSidechain === true && !opts.includeSubagents) continue;
     if (typeof j.cwd === 'string' && j.cwd) {
       if (!cwd) project.sawCwd(j.cwd);

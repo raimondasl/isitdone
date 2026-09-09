@@ -1,0 +1,57 @@
+name: Test-integrity scan was wrong
+description: A legitimate change was reported as weakening the tests, or an obvious weakening was missed.
+title: "[scanner] "
+labels: ["scanner"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every scanner mistake becomes a case in `bench/cases/`, so the before/after text is what matters most. Trim it to the smallest change that still reproduces the finding.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which way was it wrong?
+      options:
+        - False positive (a legitimate change was flagged)
+        - False negative (a weakening was missed)
+    validations:
+      required: true
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - JavaScript / TypeScript
+        - Python
+        - Go
+        - Rust
+        - Java / Kotlin
+        - C#
+        - Test configuration or CI file
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding as isitdone printed it
+      render: text
+  - type: textarea
+    id: before
+    attributes:
+      label: Test file before the change
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: after
+    attributes:
+      label: Test file after the change
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: isitdone version
+      placeholder: "0.4.1"

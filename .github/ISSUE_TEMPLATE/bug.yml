@@ -1,0 +1,30 @@
+name: Bug
+description: Wrong verdict, crash, hang, or a check that was not detected.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: "`npx isitdone --json` (or `npx isitdone doctor --json`) plus any error text."
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "isitdone 0.4.1, Node 24.2, Windows 11, npm 11"
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: "`.isitdone.json` if you have one, and the relevant `package.json` scripts / build files."
+      render: json

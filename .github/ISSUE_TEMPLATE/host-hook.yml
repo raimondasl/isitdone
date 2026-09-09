@@ -1,0 +1,61 @@
+name: Hook problem on a specific agent
+description: The Stop hook (or the post-edit hook) did not fire, blocked when it should not have, or the agent ignored the block.
+title: "[host] "
+labels: ["host"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most adapters were written from the vendors' documentation, so a report from a real installation is the most useful thing you can send. Nothing here needs to be polished.
+  - type: dropdown
+    id: host
+    attributes:
+      label: Agent
+      options:
+        - Claude Code
+        - Codex CLI
+        - Cursor
+        - Gemini CLI
+        - GitHub Copilot CLI
+        - Qwen Code
+        - Goose
+        - Factory Droid
+        - Devin
+        - Augment (Auggie)
+        - OpenCode
+        - Junie CLI
+        - Other (say which below)
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: The agent's version, `npx isitdone --version`, Node version, OS.
+      placeholder: "Codex CLI 0.x.y, isitdone 0.4.1, Node 24.2, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What the agent said, what you expected the hook to do, and what it did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `npx isitdone doctor`
+      render: text
+  - type: textarea
+    id: hookfile
+    attributes:
+      label: The hook registration
+      description: The relevant part of the settings or hooks file `init` wrote (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`, `.gemini/settings.json`, `.github/hooks/isitdone.json`, `.qwen/settings.json`, `.agents/plugins/isitdone/hooks/hooks.json`, `.factory/hooks.json`, `.devin/hooks.v1.json`, `.augment/settings.json`, `.opencode/plugins/isitdone.js`, `~/.junie/config.json`).
+      render: json
+  - type: textarea
+    id: payload
+    attributes:
+      label: The payload the agent sent (if you have it)
+      description: Some agents log the hook's stdin; anything you can share helps, with secrets removed.
+      render: json
