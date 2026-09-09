@@ -294,7 +294,47 @@ const COUNTERS: Record<Exclude<Lang, 'other'>, { test: RegExp; assertion: RegExp
  * Rust: the byte ranges of `#[cfg(test)]`-gated items (normalised text). Production `assert!`/`.unwrap()` in the same
  * file must not count as test assertions. Null when the file has no gate (an integration test under tests/).
  */
-function rustTestRegions(norm: string): Array<[number, number]> | null {
+/** The <artifactId> of the nearest enclosing block before `line` in the after-text, or null when the text does not show one. */
+function enclosingArtifact(after: string, line: string): string | null {
+  const at = after.indexOf(line.trim());
+  if (at < 0) return null;
+  const k = after.lastIndexOf('<artifactId>', at);
+  if (k < 0) return null;
+  const m = /<artifactId>\s*([^<]+?)\s*</.exec(after.slice(k));
+  return m ? (m[1] as string) : null;
+}
+
+function rustTestRegions(norm: string, sniffed = false): Array<[number, number]> | null {
+  const gated = rustGatedRegions(norm);
+  if (gated || !sniffed) return gated;
+  // A source file admitted by the content sniff for an ungated #[test] fn: only the attributed items are test code,
+  // never the production code around them (whose `?`/unwrap()/assert! are not assertions).
+  const regions: Array<[number, number]> = [];
+  const attr = /^[ \t]*#\[\s*(?:test|tokio::test|async_std::test|rstest|test_case|test_log::test|quickcheck|proptest)\b[^\n]*/gm;
+  let m: RegExpExecArray | null;
+  while ((m = attr.exec(norm))) {
+    const end = blockEnd(norm, m.index + m[0].length);
+    if (end > m.index) regions.push([m.index, end]);
+    attr.lastIndex = Math.max(attr.lastIndex, end);
+  }
+  return regions.length ? regions : null;
+}
+
+/** End of the first balanced `{...}` block (or the `;` of a bodiless item) after `from`. */
+function blockEnd(norm: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < norm.length; i++) {
+    const ch = norm[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
+    } else if (ch === ';' && depth === 0) return i + 1;
+  }
+  return norm.length;
+}
+
+function rustGatedRegions(norm: string): Array<[number, number]> | null {
   const gate = /^[ \t]*#\[\s*cfg\s*\((?:all|any)?\(?\s*test\b[^\n]*/gm;
   const regions: Array<[number, number]> = [];
   let m: RegExpExecArray | null;
@@ -509,13 +549,13 @@ export interface TestCounts {
   unknownEach: boolean;
 }
 
-export function countTests(lang: Lang, text: string | null): TestCounts {
+export function countTests(lang: Lang, text: string | null, sniffed = false): TestCounts {
   if (!text || lang === 'other') return { tests: 0, assertions: 0, skipped: 0, unknownEach: false };
   const c = COUNTERS[lang];
   let norm = normalizeFile(lang, text);
   if (lang === 'rust') {
     // Only the #[cfg(test)] regions of a source file hold tests; blank everything else (length-preserving).
-    const regions = rustTestRegions(norm);
+    const regions = rustTestRegions(norm, sniffed);
     if (regions) {
       let out = '';
       let at = 0;
@@ -699,7 +739,7 @@ const TOLERANCES: Array<{ lang: Lang; re: RegExp; kind: 'digits' | 'factor'; wha
   { lang: 'java', re: /\bassertEquals\s*\(/, kind: 'factor', what: 'assertEquals delta widened', delta: true },
   { lang: 'java', re: /\b(?:within|offset|withPrecision|byLessThan)\s*\(\s*([\d.eE+-]+)/, kind: 'factor', what: 'AssertJ tolerance widened' },
   { lang: 'java', re: /\bcloseTo\s*\([^,]+,\s*([\d.eE+-]+)/, kind: 'factor', what: 'Hamcrest closeTo tolerance widened' },
-  { lang: 'csharp', re: /\bAssert\.Equal\s*\([^;]*,\s*(?:precision:\s*)?(\d+)\s*\)\s*;/, kind: 'digits', what: 'Assert.Equal precision lowered' },
+  { lang: 'csharp', re: /\bAssert\.Equal\s*\((?:[^,;]*,){2}\s*(?:precision:\s*)?(\d+)\s*\)\s*;/, kind: 'digits', what: 'Assert.Equal precision lowered' },
   { lang: 'csharp', re: /\.Within\s*\(\s*([\d.eE+-]+)/, kind: 'factor', what: 'NUnit Within tolerance widened' },
   { lang: 'csharp', re: /\bBeApproximately\s*\([^,]+,\s*([\d.eE+-]+)/, kind: 'factor', what: 'BeApproximately tolerance widened' },
   { lang: 'csharp', re: /\bAssert\.AreEqual\s*\(/, kind: 'factor', what: 'AreEqual delta widened', delta: true },
@@ -873,7 +913,9 @@ function attrHead(lang: AttrLang, t: string): string {
 function declSignature(lang: AttrLang, lines: DiffLine[], idx: number, kind: '+' | '-'): string | null {
   const own = normalize(lang, (lines[idx] as DiffLine).text).trim();
   const rest = own.replace(/^(?:#\[[^\]]*\]|@\w+(?:\([^)]*\))?|\[[^\]]*\])\s*/, '');
-  const same = rest !== '' && !ATTR_LINE[lang].test(rest) ? signatureOf(lang, rest) : null;
+  // Signatures come from comment-stripped but string-intact text: Kotlin's `fun \`spaces in name\`()` would otherwise be blanked.
+  const intact = stripComment(lang, (lines[idx] as DiffLine).text).trim().replace(/^(?:#\[[^\]]*\]|@\w+(?:\([^)]*\))?|\[[^\]]*\])\s*/, '');
+  const same = rest !== '' && !ATTR_LINE[lang].test(rest) ? signatureOf(lang, intact) : null;
   if (same) return same;
   for (let j = idx + 1, seen = 0; j < lines.length && seen < 8; j++) {
     const l = lines[j] as DiffLine;
@@ -882,7 +924,7 @@ function declSignature(lang: AttrLang, lines: DiffLine[], idx: number, kind: '+'
     if (t === '') continue;
     seen++;
     if (ATTR_LINE[lang].test(t)) continue;
-    return signatureOf(lang, t);
+    return signatureOf(lang, stripComment(lang, l.text).trim());
   }
   return null;
 }
@@ -1087,11 +1129,13 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
   }
   const beforeText = file.status === 'added' ? null : opts.readBefore(file.oldPath ?? file.path);
   const afterText = opts.readAfter(file.path);
-  const before = countTests(lang, beforeText);
-  const after = countTests(lang, afterText);
+  // Rust: a src file admitted by the content sniff (not a test path) is test code only inside its attributed items.
+  const sniffed = lang === 'rust' && !isTestFile(file.path);
+  const before = countTests(lang, beforeText, sniffed);
+  const after = countTests(lang, afterText, sniffed);
   // Rust: every detector is confined to the #[cfg(test)] regions of a source file (null = the whole file).
-  const beforeLines = lang === 'rust' && beforeText ? regionLines(beforeText, rustTestRegions(normalizeFile(lang, beforeText))) : null;
-  const afterLines = lang === 'rust' && afterText ? regionLines(afterText, rustTestRegions(normalizeFile(lang, afterText))) : null;
+  const beforeLines = lang === 'rust' && beforeText ? regionLines(beforeText, rustTestRegions(normalizeFile(lang, beforeText), sniffed)) : null;
+  const afterLines = lang === 'rust' && afterText ? regionLines(afterText, rustTestRegions(normalizeFile(lang, afterText), sniffed)) : null;
   const inRegion = (l: DiffLine): boolean => (l.kind === '-' ? beforeLines === null || (l.oldNo !== null && beforeLines.has(l.oldNo)) : afterLines === null || (l.newNo !== null && afterLines.has(l.newNo)));
   const allLines = file.hunks.flatMap((h) => h.lines);
   const allRemoved = allLines.filter((l) => l.kind === '-' && inRegion(l));
@@ -1245,11 +1289,12 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
         const strong = removed.find((r) => d.from.test(normalize(lang, r.text)) && intersects(rawSubject(r.text), subj));
         if (!strong) continue;
         // The strong assertion is still there (re-indented / reformatted): not a downgrade.
+        if (d.from.test(normalize(lang, line.text))) continue; // the strong form is still on this very line (a fluent chain grew)
         if (added.some((a) => a !== line && d.from.test(normalize(lang, a.text)) && intersects(rawSubject(a.text), subj))) continue;
         // Existence check next to stronger assertions on the same value (snapshot -> explicit fields): not a downgrade.
         if (d.existence) {
           const roots = subj.map((s) => subjectRoot(lang, s));
-          const stronger = added.filter((a) => a !== line && STRONG_MATCHER[lang].test(normalize(lang, a.text)) && intersects(rawSubject(a.text).map((s) => subjectRoot(lang, s)), roots));
+          const stronger = added.filter((a) => STRONG_MATCHER[lang].test(normalize(lang, a.text)) && intersects(rawSubject(a.text).map((s) => subjectRoot(lang, s)), roots));
           if (stronger.length > 0) continue;
         }
         add(ctx, 'assertion-weakened', 'medium', line, `assertion weakened: ${d.what}`, `- ${strong.text.trim()}\n+ ${line.text.trim()}`, sup);
@@ -1515,7 +1560,7 @@ const CONFIG_SABOTAGE: Array<{ re: RegExp; severity: Severity; message: string; 
   { re: /\bdotnet\s+test\b[^\n]*(?:--filter(?:-[\w-]+)?[=\s]|--treenode-filter\b)|-p:VSTestTestCaseFilter=/, severity: 'high', message: 'dotnet test selection narrowed (--filter)' },
   { re: /RunConfiguration\.TreatNoTestsAsError=false|MapInconclusiveToFailed=[Ff]alse|--minimum-expected-tests\s+0\b/, severity: 'medium', message: 'dotnet test failure mapping relaxed' },
   // cargo command lines (verified: cargo-test, rustc tests CLI, nextest filtersets pages)
-  { re: /\bcargo\s+test\b[^\n]*--no-run\b/, severity: 'critical', message: 'cargo test --no-run compiles but does not run the tests' },
+  { re: /\bcargo\s+test\b[^\n]*--no-run\b/, severity: 'critical', message: 'cargo test --no-run compiles but does not run the tests', id: 'cargo-no-run' },
   { re: /\bcargo\s+test\b[^\n]*\s--\s[^\n]*(?:--skip[=\s]|--exact\b|--ignored\b(?!-))|\bcargo\s+nextest\s+run\b[^\n]*(?:--skip[=\s]|\s-E\s|--filterset\b|--run-ignored\s+only\b)/, severity: 'high', message: 'cargo test selection narrowed on the command line (--skip/--exact/--ignored/-E)' },
   { re: /\bcargo\s+(?:test|nextest\s+run)\b[^\n]*--exclude\b/, severity: 'high', message: 'cargo test --exclude: a package is no longer tested' },
   { re: /\bcargo\s+test\s+(?!-)[A-Za-z_][\w:]*\b/, severity: 'medium', message: 'cargo test <filter>: only tests whose name contains the filter run' },
@@ -1540,6 +1585,8 @@ function scanConfigFile(ctx: Ctx, movedPair: boolean): void {
     return;
   }
   const fileAdded = file.hunks.flatMap((h) => h.lines.filter((l) => l.kind === '+').map((l) => l.text)).join('\n');
+  // The after side of every hunk (context and added lines): what the file says once the change is in.
+  const fileAfter = file.hunks.flatMap((h) => h.lines).filter((l) => l.kind !== '-').map((l) => l.text).join('\n');
   for (const hunk of file.hunks) {
     const addedLines = hunk.lines.filter((l) => l.kind === '+');
     const addedText = addedLines.map((l) => l.text).join('\n');
@@ -1604,10 +1651,17 @@ function scanConfigFile(ctx: Ctx, movedPair: boolean): void {
           // configuration is a real exclusion, which a line-based scan cannot tell apart (documented, suppressible).
           const entries = [...text.matchAll(/<exclude>([^<]*)<\/exclude>/g)].map((m) => m[1] as string);
           if (entries.length > 0 && entries.every((e) => BENIGN_JVM_EXCLUDE.test(e))) continue;
+          // Inside another plugin (shade, resources, jar) an <exclude> has nothing to do with tests; an unknown enclosing
+          // plugin (the hunk is cut) keeps the finding.
+          const plugin = enclosingArtifact(fileAfter, text);
+          if (plugin !== null && !/surefire|failsafe/i.test(plugin)) {
+            severity = 'low';
+            message = `${message} (inside ${plugin}, not a test plugin)`;
+          }
         }
-        if (rule.id === 'mvn-skip' || rule.id === 'gradle-x') {
+        if (rule.id === 'mvn-skip' || rule.id === 'gradle-x' || rule.id === 'cargo-no-run') {
           // `mvn -DskipTests package` followed by `mvn test` (build first, test later) still runs the tests.
-          const stillRuns = rule.id === 'mvn-skip' ? new RegExp(`\\bmvnw?\\b(?![^\\n]*(?:${MAVEN_SKIP.source}))[^\\n]*\\b(?:test|verify|integration-test)\\b`).test(fileAdded) : new RegExp(`\\bgradlew?\\b(?![^\\n]*\\s(?:-x|--exclude-task)\\s+(?:test|check)\\b)[^\\n]*\\b(?:test|check|build)\\b`).test(fileAdded);
+          const stillRuns = rule.id === 'mvn-skip' ? new RegExp(`\\bmvnw?\\b(?![^\\n]*(?:${MAVEN_SKIP.source}))[^\\n]*\\b(?:test|verify|integration-test)\\b`).test(fileAdded) : rule.id === 'gradle-x' ? new RegExp(`\\bgradlew?\\b(?![^\\n]*\\s(?:-x|--exclude-task)\\s+(?:test|check)\\b)[^\\n]*\\b(?:test|check|build)\\b`).test(fileAdded) : /\bcargo\s+(?:test|nextest\s+run|llvm-cov)\b(?![^\n]*--no-run\b)/.test(fileAfter);
           if (stillRuns) {
             severity = 'low';
             message = `${message}; another step still runs the tests`;
@@ -1704,8 +1758,8 @@ export function scanIntegrity(files: DiffFile[], opts: ScanOptions): IntegrityRe
     const movedPair = pairs.has(file.path);
     if (isTest(file.path, file.status === 'deleted') || (file.oldPath && isTest(file.oldPath, true))) {
       testFiles++;
-      const before = countTests(lang, file.status === 'added' ? null : opts.readBefore(file.oldPath ?? file.path));
-      const after = countTests(lang, file.status === 'deleted' ? null : opts.readAfter(file.path));
+      const before = countTests(lang, file.status === 'added' ? null : opts.readBefore(file.oldPath ?? file.path), lang === 'rust' && !isTestFile(file.path));
+      const after = countTests(lang, file.status === 'deleted' ? null : opts.readAfter(file.path), lang === 'rust' && !isTestFile(file.path));
       summary.testsBefore += before.tests;
       summary.testsAfter += after.tests;
       summary.assertionsBefore += before.assertions;

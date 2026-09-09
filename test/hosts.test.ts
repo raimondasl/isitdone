@@ -19,6 +19,8 @@ const CMD = (h: string) => `npx -y @aivolution/isitdone hook --host ${h}`;
 
 /** Every JSON-settings host that can be installed at project scope. */
 const PROJECT_JSON_HOSTS: HostName[] = ['copilot', 'qwen', 'goose', 'droid', 'devin', 'augment'];
+// Auggie executes script files, so the registered command is the wrapper path (which forwards to the isitdone command).
+const AUG_CMD = process.platform === 'win32' ? '.augment\\hooks\\isitdone-hook.cmd' : '.augment/hooks/isitdone-hook.sh';
 
 describe('new host adapters: payload and output shapes', () => {
   it('copilot: camelCase payload, snake_case flag, decision allow/block, no last message', () => {
@@ -158,7 +160,7 @@ describe('init for the new hosts', () => {
     // Droid and Devin project files carry the event map at the top level
     expect(read(join(root, '.factory', 'hooks.json'))).toEqual({ Stop: [{ hooks: [{ type: 'command', command: CMD('droid'), timeout: 120 }] }] });
     expect(read(join(root, '.devin', 'hooks.v1.json'))).toEqual({ Stop: [{ hooks: [{ type: 'command', command: CMD('devin'), timeout: 120 }] }] });
-    expect(read(join(root, '.augment', 'settings.json'))).toEqual({ hooks: { Stop: [{ metadata: { includeConversationData: true }, hooks: [{ type: 'command', command: CMD('augment'), timeout: 120000 }] }] } });
+    expect(read(join(root, '.augment', 'settings.json'))).toEqual({ hooks: { Stop: [{ metadata: { includeConversationData: true }, hooks: [{ type: 'command', command: AUG_CMD, timeout: 120000 }] }] } });
 
     const installed = installedHooks(root);
     expect(installed.map((h) => `${h.host.name}:${h.timeout}`)).toEqual(PROJECT_JSON_HOSTS.map((h) => `${h}:120`));
@@ -172,16 +174,18 @@ describe('init for the new hosts', () => {
     }
     expect(installedHooks(root)).toEqual([]);
     // removal leaves nothing but empty objects behind
-    expect(read(join(root, '.github', 'hooks', 'isitdone.json'))).toEqual({ version: 1 });
-    expect(read(join(root, '.factory', 'hooks.json'))).toEqual({});
+    // ... except for files whose empty shell would do harm: Droid keeps masking settings.json, Copilot would be schema-invalid.
+    expect(existsSync(join(root, '.github', 'hooks', 'isitdone.json'))).toBe(false);
+    expect(existsSync(join(root, '.factory', 'hooks.json'))).toBe(false);
     expect(read(join(root, '.augment', 'settings.json'))).toEqual({});
+    expect(existsSync(join(root, '.augment', 'hooks', 'isitdone-hook.sh'))).toBe(false);
   });
 
   it('augment: user-added metadata keys survive a re-init, a missing includeConversationData is restored', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: 'x' }) } });
     const root = repo.root;
     const path = join(root, '.augment', 'settings.json');
-    repo.write('.augment/settings.json', JSON.stringify({ hooks: { Stop: [{ metadata: { includeUserContext: true }, hooks: [{ type: 'command', command: CMD('augment'), timeout: 120000 }] }] } }));
+    repo.write('.augment/settings.json', JSON.stringify({ hooks: { Stop: [{ metadata: { includeUserContext: true }, hooks: [{ type: 'command', command: AUG_CMD, timeout: 120000 }] }] } }));
     expect(init({ editHook: false, root, hosts: ['augment'], scope: 'project', timeout: 120 })[0]?.action).toBe('updated');
     expect((read(path).hooks as { Stop: Array<{ metadata: unknown }> }).Stop[0]?.metadata).toEqual({ includeUserContext: true, includeConversationData: true });
     expect(init({ editHook: false, root, hosts: ['augment'], scope: 'project', timeout: 120 })[0]?.action).toBe('unchanged');

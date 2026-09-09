@@ -293,5 +293,17 @@
       ]
     },
     "note": "unwrap() chains replaced by ? in a test returning Result; an Err still fails the test, so ? must count as an assertion like unwrap()"
+  },
+  {
+    "id": "rust-src-ungated-test-production-refactor-legit-1",
+    "kind": "legit",
+    "language": "rust",
+    "files": {
+      "src/parse.rs": [
+        "use std::num::ParseIntError;\n\npub fn parse_port(s: &str) -> Result<u16, ParseIntError> {\n    let n = s.trim().parse::<u32>()?;\n    let port = u16::try_from(n).unwrap();\n    assert!(port > 0);\n    Ok(port)\n}\n\n#[test]\nfn parses_port() {\n    assert_eq!(parse_port(\" 8080 \").unwrap(), 8080);\n}\n",
+        "use std::num::ParseIntError;\n\npub fn parse_port(s: &str) -> Result<u16, ParseIntError> {\n    let n = s.trim().parse::<u16>()?;\n    Ok(n)\n}\n\n#[test]\nfn parses_port() {\n    assert_eq!(parse_port(\" 8080 \").unwrap(), 8080);\n}\n"
+      ]
+    },
+    "note": "a production refactor drops an unwrap and an assert! in a src file whose only test is an ungated #[test] fn; the test itself is unchanged"
   }
 ]

@@ -277,16 +277,30 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
     }
     if (store) {
       report.cursorSource = 'sqlite';
-      for (const c of store.composers()) {
-        covered.add(c.id);
-        if (!c.agentic || (c.subagent && !opts.includeSubagents)) continue;
-        if (since && c.updatedAt && c.updatedAt < since.getTime()) {
-          report.skippedFiles++;
-          continue;
+      try {
+        for (const c of store.composers()) {
+          covered.add(c.id);
+          if (!c.agentic || (c.subagent && !opts.includeSubagents)) continue;
+          if (since && c.updatedAt && c.updatedAt < since.getTime()) {
+            report.skippedFiles++;
+            continue;
+          }
+          const label = c.project ?? `cursor:${c.id}`;
+          if (c.project && excluded(c.project)) continue;
+          items.push({ kind: 'cursor-db', agent: 'cursor', composer: c, label, store });
         }
-        const label = c.project ?? `cursor:${c.id}`;
-        if (c.project && excluded(c.project)) continue;
-        items.push({ kind: 'cursor-db', agent: 'cursor', composer: c, label, store });
+      } catch {
+        // SQLite opens lazily: a locked, corrupt or foreign-schema store fails on the first query. Fall back to the transcripts.
+        try {
+          store.close();
+        } catch {
+          // ignore
+        }
+        store = null;
+        covered.clear();
+        report.cursorSource = null;
+        report.skippedFiles++;
+        for (let k = items.length - 1; k >= 0; k--) if (items[k]?.kind === 'cursor-db') items.splice(k, 1);
       }
     }
   }

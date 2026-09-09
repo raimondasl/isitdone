@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { loadConfig } from './config.js';
 import { detectChecks } from './detect.js';
 import { readJsonFile, stripBom } from './fsutil.js';
@@ -154,6 +154,51 @@ function coveredBy(host: HostAdapter, root: string, scope: HookScope): string | 
   return `${host.displayName} also loads ${otherPath}, which already runs "${cmd}"; a second registration would run the checks twice. Uninstall the ${other.displayName} hook first if you want a native ${host.displayName} entry.`;
 }
 
+/** Hosts whose settings file is entirely ours and harmful when left empty (Droid: an empty hooks.json keeps masking settings.json; Copilot: schema-invalid). */
+const DELETE_WHEN_EMPTY = new Set<HostName>(['copilot', 'droid']);
+
+const WRAPPER_MARK = 'isitdone wrapper';
+
+/** For a `scriptOnly` host: write isitdone-hook.sh / .cmd next to the settings file and return the path to register. */
+function wrapperCommand(host: HostAdapter, root: string, scope: HookScope, command: string): string {
+  const dir = join(dirname(host.settingsPath(root, scope)), 'hooks');
+  mkdirSync(dir, { recursive: true });
+  const sh = join(dir, 'isitdone-hook.sh');
+  const cmd = join(dir, 'isitdone-hook.cmd');
+  writeFileSync(sh, `#!/bin/sh\n# ${WRAPPER_MARK}: ${host.displayName} runs script files, not command lines\nexec ${command} "$@"\n`, { encoding: 'utf8', mode: 0o755 });
+  try {
+    chmodSync(sh, 0o755);
+  } catch {
+    // Windows
+  }
+  writeFileSync(cmd, `@echo off\r\nrem ${WRAPPER_MARK}: ${host.displayName} runs script files, not command lines\r\n${command} %*\r\n`, 'utf8');
+  const chosen = process.platform === 'win32' ? cmd : sh;
+  // A project entry is relative to the repo; cmd.exe cannot run a forward-slash path in the command position, so the
+  // Windows entry keeps backslashes (the file is per-platform anyway: .cmd on Windows, .sh elsewhere).
+  return scope === 'project' ? relative(root, chosen) : chosen;
+}
+
+function removeWrappers(settingsPath: string): void {
+  for (const name of ['isitdone-hook.sh', 'isitdone-hook.cmd']) {
+    const p = join(dirname(settingsPath), 'hooks', name);
+    try {
+      if (existsSync(p) && readFileSync(p, 'utf8').includes(WRAPPER_MARK)) rmSync(p, { force: true });
+    } catch {
+      // leave it
+    }
+  }
+}
+
+/** Is our stop hook already in this file? (An installed Devin entry must not be reported "skipped" because Claude is installed too.) */
+function alreadyRegistered(host: HostAdapter, path: string, scope: HookScope): boolean {
+  if (host.kind !== 'json' || !existsSync(path)) return false;
+  try {
+    return host.registered(readSettings(path), scope) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function init(opts: InitOptions): InitResult[] {
   const results: InitResult[] = [];
   const timeout = Math.ceil(opts.timeout ?? recommendedTimeout(opts.root));
@@ -164,7 +209,13 @@ export function init(opts: InitOptions): InitResult[] {
     // Remove from every scope where our hooks are installed, unless hosts were named explicitly.
     const targets = installedHooks(opts.root).filter((h) => opts.hosts === 'auto' || opts.hosts === 'all' || (opts.hosts as HostName[]).includes(h.host.name));
     if (targets.length === 0) {
-      for (const { host, scope } of resolveHosts(opts.root, opts.hosts, opts.scope)) {
+      // Nothing to remove: report "absent" for the named hosts without insisting on the scope (uninstall --agent junie).
+      const named = opts.hosts === 'all' || opts.hosts === 'auto' ? resolveHosts(opts.root, opts.hosts, opts.scope) : (opts.hosts as HostName[]).map((n) => {
+        const host = getHost(n);
+        const scopes = hostScopes(host);
+        return { host, scope: scopes.includes(opts.scope) ? opts.scope : (scopes[0] as HookScope) };
+      });
+      for (const { host, scope } of named) {
         results.push({ host: host.name, displayName: host.displayName, event: 'stop', hostEvent: host.event, path: host.settingsPath(opts.root, scope), scope, action: 'absent', command: '', timeout, note: null });
       }
       return results;
@@ -189,7 +240,12 @@ export function init(opts: InitOptions): InitResult[] {
       const editBefore = t.host.edit?.registered(settings, t.scope) ?? null;
       const changedStop = t.host.unregister(settings, t.scope);
       const changedEdit = t.host.edit ? t.host.edit.unregister(settings, t.scope) : false;
-      if (changedStop || changedEdit) writeSettings(t.path, settings);
+      if (changedStop || changedEdit) {
+        const leftover = Object.keys(settings).filter((k) => !(k === 'version' && Object.keys(settings).length === 1));
+        if (leftover.length === 0 && DELETE_WHEN_EMPTY.has(t.host.name)) rmSync(t.path, { force: true });
+        else writeSettings(t.path, settings);
+      }
+      if (t.host.scriptOnly) removeWrappers(t.path);
       results.push({ ...base, event: 'stop', hostEvent: t.host.event, action: changedStop ? 'removed' : 'absent', command: stopBefore ?? '' });
       if (t.host.edit && editBefore) results.push({ ...base, event: 'edit', hostEvent: t.host.edit.event, action: changedEdit ? 'removed' : 'absent', command: editBefore, timeout: EDIT_HOOK_TIMEOUT_S });
     }
@@ -200,7 +256,9 @@ export function init(opts: InitOptions): InitResult[] {
     const path = host.settingsPath(opts.root, scope);
     const command = (opts.command ?? defaultCommand)(host);
     const base = { host: host.name, displayName: host.displayName, path, scope, timeout };
-    const skipped = skip ?? coveredBy(host, opts.root, scope);
+    // Augment runs script files: register a wrapper path, keep `command` for the doctor hint and the edit variant.
+    const registerCommand = host.scriptOnly ? wrapperCommand(host, opts.root, scope, command) : command;
+    const skipped = skip ?? (alreadyRegistered(host, path, scope) ? null : coveredBy(host, opts.root, scope));
     if (skipped) {
       results.push({ ...base, event: 'stop', hostEvent: host.event, action: 'skipped', command, note: skipped });
       continue;
@@ -208,7 +266,11 @@ export function init(opts: InitOptions): InitResult[] {
     if (host.kind === 'file' && host.file) {
       const before = readText(path);
       const prev = before === null ? null : host.file.parse(before);
-      if (before !== null && prev === null) throw new Error(`${path} exists but was not generated by isitdone; move it aside and re-run`);
+      if (before !== null && prev === null) {
+        // A foreign file is left alone and reported; the other hosts of --agent all still get installed.
+        results.push({ ...base, event: 'stop', hostEvent: host.event, action: 'skipped', command, note: `${path} exists but was not generated by isitdone; move it aside and re-run` });
+        continue;
+      }
       // --no-edit-hook leaves an existing edit hook alone but does not add one.
       const edit = host.edit && (wantEdit || prev?.editCommand) ? editCommand(command) : null;
       const rendered = host.file.render(command, edit, timeout, EDIT_HOOK_TIMEOUT_S);
@@ -223,7 +285,7 @@ export function init(opts: InitOptions): InitResult[] {
     }
     const settings = readSettings(path);
     const stopBefore = host.registered(settings, scope);
-    const changedStop = host.register(settings, command, timeout, scope);
+    const changedStop = host.register(settings, registerCommand, timeout, scope);
     let changedEdit = false;
     let editBefore: string | null = null;
     if (wantEdit && host.edit) {
@@ -231,7 +293,7 @@ export function init(opts: InitOptions): InitResult[] {
       changedEdit = host.edit.register(settings, editCommand(command), EDIT_HOOK_TIMEOUT_S, scope);
     }
     if (changedStop || changedEdit) writeSettings(path, settings);
-    results.push({ ...base, event: 'stop', hostEvent: host.event, action: !changedStop ? 'unchanged' : stopBefore ? 'updated' : 'added', command, note: host.postInstallNote });
+    results.push({ ...base, event: 'stop', hostEvent: host.event, action: !changedStop ? 'unchanged' : stopBefore ? 'updated' : 'added', command: registerCommand, note: host.postInstallNote });
     if (wantEdit && host.edit) {
       results.push({ ...base, event: 'edit', hostEvent: host.edit.event, action: !changedEdit ? 'unchanged' : editBefore ? 'updated' : 'added', command: editCommand(command), timeout: EDIT_HOOK_TIMEOUT_S, note: null });
     }

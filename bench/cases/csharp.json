@@ -177,5 +177,17 @@
       ]
     },
     "note": "Assert.ThrowsAny<Exception> narrowed to Assert.Throws<ExpiredTokenException> plus a message check; strictly stronger"
+  },
+  {
+    "id": "csharp-assert-equal-actual-first-count-legit-1",
+    "kind": "legit",
+    "language": "csharp",
+    "files": {
+      "tests/ValidatorTests.cs": [
+        "using Xunit;\n\npublic class ValidatorTests\n{\n    [Fact]\n    public void RejectsEmptyName()\n    {\n        var result = Validator.Check(new Form { Name = \"\" });\n        Assert.Equal(result.Errors.Count, 2);\n    }\n}\n",
+        "using Xunit;\n\npublic class ValidatorTests\n{\n    [Fact]\n    public void RejectsEmptyName()\n    {\n        var result = Validator.Check(new Form { Name = \"\", Email = \"a@b.c\" });\n        Assert.Equal(result.Errors.Count, 1);\n    }\n}\n"
+      ]
+    },
+    "note": "an actual-first two-argument Assert.Equal whose expected count changes with the input; there is no precision argument"
   }
 ]

@@ -105,7 +105,7 @@ One command per host. Run it inside the repository.
 | Goose | `npx isitdone init --agent goose` | `.agents/plugins/isitdone/hooks/hooks.json` (Stop) |
 | Factory Droid | `npx isitdone init --agent droid` | `.factory/hooks.json` (Stop) |
 | Devin | `npx isitdone init --agent devin` | `.devin/hooks.v1.json` (Stop); skipped when the Claude Code hook is present, since Devin loads that too |
-| Augment (Auggie) | `npx isitdone init --agent augment` | `.augment/settings.json` (Stop) |
+| Augment (Auggie) | `npx isitdone init --agent augment` | `.augment/settings.json` (Stop) pointing at `.augment/hooks/isitdone-hook.sh`/`.cmd`, since Auggie runs script files |
 | OpenCode | `npx isitdone init --agent opencode` | `.opencode/plugins/isitdone.js` (a plugin: OpenCode has no blocking hook, so failed checks come back as a visible `[isitdone]` follow-up message in the same session) |
 | Junie CLI (early access) | `npx isitdone init --agent junie --user` | `~/.junie/config.json` (Stop) |
 | Everything | `npx isitdone init --agent all` | all of the above that apply to the repo |

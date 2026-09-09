@@ -1,4 +1,4 @@
-name: 'isitdone'
+name: 'isitdone verify'
 description: "Verify the change is really done: run the repo's own tests/typecheck/lint, scan the diff for weakened tests, post the receipt as a job summary and a sticky PR comment, optionally upload SARIF."
 author: 'raimondasl'
 branding:

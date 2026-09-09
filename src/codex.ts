@@ -220,18 +220,20 @@ export async function scanCodexSession(file: string, opts: { since?: Date | null
     if (type === 'turn_context' && typeof payload.cwd === 'string') cwd = payload.cwd;
     if (type === 'event_msg') {
       const et = payload.type;
-      if (et === 'turn_started') {
+      if (et === 'turn_started' || et === 'task_started') {
+        // Rollouts write the v1 names (task_started/task_complete). The user message of the same prompt comes first in
+        // the file and has already opened this turn the first time round, so only later events close a turn here.
+        if (sawTurnEvents) turn.finalize();
         sawTurnEvents = true;
-        turn.finalize();
         turn.prompt();
       } else if (et === 'thread_rolled_back') {
         // The user undid the last N turns (/undo, thread/rollback): their claims no longer stand.
         if (typeof payload.num_turns === 'number' && payload.num_turns > 0) turn.rollback(payload.num_turns);
-      } else if (et === 'turn_complete') {
+      } else if (et === 'turn_complete' || et === 'task_complete') {
         if (typeof payload.last_agent_message === 'string') turn.text(payload.last_agent_message, at);
         sawTurnEvents = true;
         turn.finalize();
-      } else if (et === 'turn_aborted') {
+      } else if (et === 'turn_aborted' || et === 'task_aborted') {
         // Persisted on its own by 2025 builds that did not persist turn_started/turn_complete: it ends this turn but
         // says nothing about how the rest of the file delimits turns.
         if (typeof payload.last_agent_message === 'string') turn.text(payload.last_agent_message, at);

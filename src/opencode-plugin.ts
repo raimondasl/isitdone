@@ -100,9 +100,13 @@ function run(command, payload, cwd, timeoutMs) {
 const textOf = (m) => (m.parts || []).filter((p) => p && p.type === "text" && typeof p.text === "string").map((p) => p.text).join("\\n");
 const isOurs = (m) => m.info && m.info.role === "user" && (m.parts || []).some((p) => p && p.type === "text" && typeof p.text === "string" && p.text.startsWith(MARKER));
 const describe = (e) => (e && e.message ? e.message : String(e));
+// A user message whose text parts are all synthetic is OpenCode talking to itself (shell runs, compaction auto-continue), not a prompt.
+const synthetic = (m) => { const t = (m.parts || []).filter((p) => p && p.type === "text"); return t.length > 0 && t.every((p) => p.synthetic); };
+// One check per session at a time: a second idle while the checks run would grade a stale turn or inject twice.
+const inflight = new Set();
 
 export const IsItDone = async ({ client, directory, worktree }) => {
-  const root = worktree || directory || process.cwd();
+  const root = worktree && worktree !== "/" ? worktree : directory || process.cwd(); // OpenCode reports "/" outside version control
   const log = async (level, message) => {
     try {
       await client.app.log({ body: { service: "isitdone", level, message } });
@@ -112,7 +116,8 @@ export const IsItDone = async ({ client, directory, worktree }) => {
     event: async ({ event }) => {
       if (!event || event.type !== "session.idle") return;
       const id = event.properties && event.properties.sessionID;
-      if (!id) return;
+      if (!id || inflight.has(id)) return;
+      inflight.add(id);
       try {
         const session = (await client.session.get({ path: { id } })).data;
         if (!session || session.parentID) return; // subagent sessions are graded through their parent
@@ -123,15 +128,17 @@ export const IsItDone = async ({ client, directory, worktree }) => {
           const m = messages[i];
           if (!m || !m.info) continue;
           if (!assistant && m.info.role === "assistant") assistant = m;
-          else if (!user && m.info.role === "user") user = m;
+          else if (!user && m.info.role === "user" && !synthetic(m)) user = m;
         }
         if (!user || !assistant || assistant.info.error) return; // aborted or errored turn: nothing to grade
+        if (textOf(assistant) === "" || (assistant.info.parentID && assistant.info.parentID !== user.info.id)) return; // a !shell run or a tool-only message, not the end of a turn
         // Trailing user messages that we injected = how many times we already sent this turn back.
         let loop = 0;
         for (let i = messages.length - 1; i >= 0; i--) {
           const m = messages[i];
           if (!m || !m.info || m.info.role !== "user") continue;
           if (isOurs(m)) loop++;
+          else if (synthetic(m)) continue;
           else break;
         }
         const payload = {
@@ -146,10 +153,21 @@ export const IsItDone = async ({ client, directory, worktree }) => {
         };
         const out = await run(STOP_COMMAND, payload, root, STOP_TIMEOUT_MS);
         if (out && out.decision === "block" && typeof out.reason === "string" && out.reason !== "") {
-          await client.session.promptAsync({ path: { id }, body: { parts: [{ type: "text", text: MARKER + " " + out.reason }] } });
+          // Still the same turn? Another prompt may have arrived while the checks ran.
+          const latest = (await client.session.messages({ path: { id } })).data || [];
+          const last = latest.length ? latest[latest.length - 1] : null;
+          if (!last || !last.info || last.info.id !== assistant.info.id) return;
+          // Re-prompt under the session's own agent and model; without them OpenCode would switch to its defaults.
+          const body = { parts: [{ type: "text", text: MARKER + " " + out.reason }] };
+          if (user.info.agent) body.agent = user.info.agent;
+          if (user.info.model && user.info.model.providerID && user.info.model.modelID) body.model = { providerID: user.info.model.providerID, modelID: user.info.model.modelID };
+          if (user.info.model && user.info.model.variant) body.variant = user.info.model.variant;
+          await client.session.promptAsync({ path: { id }, body });
         }
       } catch (e) {
         await log("error", "stop check failed: " + describe(e));
+      } finally {
+        inflight.delete(id);
       }
     },
   };

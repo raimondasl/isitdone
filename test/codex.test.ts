@@ -89,6 +89,29 @@ describe('scanCodexSession', () => {
     ]);
   });
 
+  it('v1 wire names task_started/task_complete delimit turns once per prompt, so thread_rolled_back retracts exactly one turn', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'isitdone-codex-'));
+    const file = write('sessions/2026/09/05/rollout-2026-09-05T10-00-00-thread-5.jsonl', [
+      meta('/work/app5'),
+      user('first'),
+      line('event_msg', { type: 'task_started', turn_id: 't1' }),
+      patch(),
+      exec('c1', 'npm test'),
+      output('c1', 0),
+      line('event_msg', { type: 'task_complete', turn_id: 't1', last_agent_message: 'Done, tests pass.' }),
+      user('second'),
+      line('event_msg', { type: 'task_started', turn_id: 't2' }),
+      patch(),
+      line('event_msg', { type: 'task_complete', turn_id: 't2', last_agent_message: 'Implemented, all done.' }),
+      line('event_msg', { type: 'thread_rolled_back', num_turns: 1 }),
+    ]);
+    const out: ClaimRecord[] = [];
+    const stats = { editTurns: 0 };
+    await scanCodexSession(file, {}, out, stats);
+    expect(out.map((c) => [c.verdict, c.claim])).toEqual([['VERIFIED', 'Done, tests pass.']]);
+    expect(stats.editTurns).toBe(1);
+  });
+
   it('exitOk understands the modern header, legacy JSON metadata, and unknown output', () => {
     expect(exitOk('Wall time: 2.3 seconds\nProcess exited with code 0\nOutput:\nok')).toBe(true);
     expect(exitOk('Process exited with code 2\nOutput:\nFAIL')).toBe(false);

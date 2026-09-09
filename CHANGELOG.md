@@ -17,6 +17,9 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 - `stop_hook_active` may be absent: the hook then counts consecutive blocks itself and resets when it gives up.
 - `history --json` reports `byAgent.<name>` for every source and marks claims without exit codes as `lossy`.
+- The GitHub Action is listed as `isitdone verify` (the Marketplace forbids a name that matches an existing GitHub user); `uses: raimondasl/isitdone@v0` is unchanged.
+- Augment: Auggie runs script files, so `init` writes `.augment/hooks/isitdone-hook.sh` and `.cmd` and registers the wrapper path instead of a command line.
+- Review fixes before release: the OpenCode plugin re-prompts under the session's own agent and model, ignores shell runs and synthetic messages, and never runs two checks for one session at once; Codex rollouts using the v1 `task_started`/`task_complete` names delimit turns once per prompt (so `/undo` retracts the right turn); a Cursor bubble-store query error falls back to the transcripts; Gemini `$rewindTo` with an unknown id drops nothing; `uninstall` deletes an emptied Droid or Copilot hooks file and works for Junie without `--user`; `init --agent all` reports a foreign OpenCode plugin file as skipped instead of aborting; an installed Devin hook is `unchanged`, not `skipped`. Scanner precision: `cargo test --no-run` next to a real `cargo test` step is low; a pom.xml `<exclude>` inside a non-test plugin (shade, resources) is low; a two-argument `Assert.Equal` is not a precision change; an ungated `#[test]` in a Rust source file no longer turns the production code around it into test code; a fluent chain that gains `isNotNull()` on the same line is not a downgrade; Kotlin backtick test names keep their identity.
 
 ## [0.3.0] - 2026-09-07
 

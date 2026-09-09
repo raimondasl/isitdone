@@ -99,6 +99,8 @@ export interface HostAdapter {
   scopes?: HookScope[];
   /** Another host whose registration this host also loads (so a second one would run the checks twice). */
   coveredBy?: HostName;
+  /** The host runs a script file (.sh/.cmd), not a command line: init writes a wrapper next to the settings file and registers its path. */
+  scriptOnly?: boolean;
   /** The settings file stores hook timeouts in milliseconds. */
   msTimeouts?: boolean;
   /** Normalise the raw payload. */
@@ -801,6 +803,9 @@ const augment: HostAdapter = {
   kind: 'json',
   event: 'Stop',
   msTimeouts: true,
+  // verified: https://docs.augmentcode.com/cli/hooks ("command: Path to the script to execute (must use a supported script
+  // extension: .ps1, .cmd, .bat, or .sh)"), so init registers .augment/hooks/isitdone-hook.{sh,cmd} instead of a command line.
+  scriptOnly: true,
   settingsPath: (root, scope) => (scope === 'project' ? join(root, '.augment', 'settings.json') : join(homedir(), '.augment', 'settings.json')),
   detect: (root, scope) => [scope === 'project' ? join(root, '.augment') : join(homedir(), '.augment')],
   parse: (raw) => {
@@ -824,7 +829,7 @@ const augment: HostAdapter = {
   register: (s, command, timeout) => registerClaudeStyle(s, 'Stop', command, timeout * 1000, { groupExtra: { metadata: { includeConversationData: true } }, isMine: isStop }),
   registered: (s) => registeredClaudeStyle(s, 'Stop', isStop),
   unregister: (s) => unregisterClaudeStyle(s, 'Stop', isStop),
-  postInstallNote: 'Auggie reads .augment/settings.json at startup: restart auggie after init. Augment has no per-turn continuation flag, so isitdone counts its own attempts per conversation.',
+  postInstallNote: 'Auggie reads .augment/settings.json at startup: restart auggie after init. Auggie runs hook scripts, not command lines, so the entry points at .augment/hooks/isitdone-hook.sh (.cmd on Windows), a one-line wrapper around the isitdone command; keep both files with the settings. Augment has no per-turn continuation flag, so isitdone counts its own attempts per conversation.',
   synthetic: (root, message) => ({
     hook_event_name: 'Stop',
     conversation_id: 'isitdone-doctor',

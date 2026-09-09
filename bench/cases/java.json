@@ -293,5 +293,29 @@
       ]
     },
     "note": "@DisabledOnOs(WINDOWS) added to a test that reads POSIX permissions; it still runs on Linux/macOS CI (platform predicates are low severity)"
+  },
+  {
+    "id": "java-pom-shade-exclude-legit-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "pom.xml": [
+        "<project>\n  <build>\n    <plugins>\n      <plugin>\n        <artifactId>maven-surefire-plugin</artifactId>\n        <version>3.2.5</version>\n      </plugin>\n    </plugins>\n  </build>\n</project>\n",
+        "<project>\n  <build>\n    <plugins>\n      <plugin>\n        <artifactId>maven-surefire-plugin</artifactId>\n        <version>3.2.5</version>\n      </plugin>\n      <plugin>\n        <artifactId>maven-shade-plugin</artifactId>\n        <version>3.5.1</version>\n        <configuration>\n          <filters>\n            <filter>\n              <artifact>*:*</artifact>\n              <excludes>\n                <exclude>META-INF/*.SF</exclude>\n                <exclude>META-INF/*.DSA</exclude>\n                <exclude>META-INF/*.RSA</exclude>\n              </excludes>\n            </filter>\n          </filters>\n        </configuration>\n      </plugin>\n    </plugins>\n  </build>\n</project>\n"
+      ]
+    },
+    "note": "the shade plugin is added with its documented signature-file excludes; nothing about Surefire changes"
+  },
+  {
+    "id": "java-assertj-chain-grows-legit-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "src/test/java/UserTest.java": [
+        "import static org.assertj.core.api.Assertions.assertThat;\nimport org.junit.jupiter.api.Test;\n\nclass UserTest {\n  @Test\n  void keepsName() {\n    User u = new User(\"Ann\");\n    assertThat(u.name()).isEqualTo(\"Ann\");\n  }\n}\n",
+        "import static org.assertj.core.api.Assertions.assertThat;\nimport org.junit.jupiter.api.Test;\n\nclass UserTest {\n  @Test\n  void keepsName() {\n    User u = new User(\"Ann\");\n    assertThat(u.name()).isNotNull().isEqualTo(\"Ann\");\n  }\n}\n"
+      ]
+    },
+    "note": "an isNotNull() is added in front of the unchanged isEqualTo() on the same line"
   }
 ]

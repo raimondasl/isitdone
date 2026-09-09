@@ -227,12 +227,10 @@ export async function loadGeminiMessages(file: string): Promise<{ messages: Rec[
   };
   const apply = (rec: Rec) => {
     if (typeof rec.$rewindTo === 'string') {
-      let found = false;
-      for (const id of [...messages.keys()]) {
-        if (id === rec.$rewindTo) found = true;
-        if (found) messages.delete(id);
-      }
-      if (!found) messages.clear();
+      // As the CLI's own loader: drop the target and everything after it, nothing when the target is unknown.
+      const ids = [...messages.keys()];
+      const at = ids.indexOf(rec.$rewindTo);
+      if (at >= 0) for (const id of ids.slice(at)) messages.delete(id);
     } else if (typeof rec.id === 'string') {
       // A later line with the same id replaces the earlier one; the original position is kept (Map semantics, as in
       // the CLI's own loader), which is how tool calls get attached to an already-written model message.
