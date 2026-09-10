@@ -279,14 +279,17 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
       report.cursorSource = 'sqlite';
       try {
         for (const c of store.composers()) {
+          // A composer whose workspace cannot be resolved cannot be matched against --exclude; leave it to its JSONL twin,
+          // whose project slug can (exit codes are lost there, which the report says).
+          if (!c.project) continue;
           covered.add(c.id);
           if (!c.agentic || (c.subagent && !opts.includeSubagents)) continue;
           if (since && c.updatedAt && c.updatedAt < since.getTime()) {
             report.skippedFiles++;
             continue;
           }
-          const label = c.project ?? `cursor:${c.id}`;
-          if (c.project && excluded(c.project)) continue;
+          const label = c.project;
+          if (excluded(label)) continue;
           items.push({ kind: 'cursor-db', agent: 'cursor', composer: c, label, store });
         }
       } catch {

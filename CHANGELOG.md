@@ -7,6 +7,8 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 ### Fixed
 
 - `history` (Qwen Code): a `/rewind` leaves the truncated branch in the session file; only the live `parentUuid` chain is graded now, so rewound claims no longer count.
+- `history` (Cursor): a composer whose workspace cannot be resolved is left to its JSONL transcript, where `--exclude` can match the project slug, instead of being scanned from the bubble store under an unmatchable label.
+- `init`: installing the Claude Code hook next to a native Devin entry now says so (Devin loads both).
 
 ### Added
 

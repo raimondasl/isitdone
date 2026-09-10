@@ -179,6 +179,7 @@ describe.skipIf(!hasSqlite)('Cursor bubble store (node:sqlite)', () => {
       allComposers: [
         { type: 'head', composerId: C1, name: 'x', unifiedMode: 'agent', workspaceIdentifier: { id: 'ws1', uri: { $mid: 1, fsPath: '/Users/me/app', external: 'file:///Users/me/app', path: '/Users/me/app', scheme: 'file' } } },
         { type: 'head', composerId: C2, name: 'y', unifiedMode: 'chat', workspaceIdentifier: { id: '1775744516184' } },
+        { type: 'head', composerId: C3, name: 'sub', unifiedMode: 'agent', workspaceIdentifier: { id: 'ws1', uri: { $mid: 1, fsPath: '/Users/me/app', external: 'file:///Users/me/app', path: '/Users/me/app', scheme: 'file' } } },
       ],
     });
     writeFileSync(join(userDir, 'workspaceStorage', 'ws2', 'workspace.json'), JSON.stringify({ folder: pathToFileURL(lib).href }));
@@ -228,7 +229,7 @@ describe.skipIf(!hasSqlite)('Cursor bubble store (node:sqlite)', () => {
       [
         [C1, '/Users/me/app', true, false],
         [C2, null, false, false],
-        [C3, null, true, true],
+        [C3, '/Users/me/app', true, true],
         [C4, lib, true, false],
       ].sort(),
     );

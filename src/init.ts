@@ -293,7 +293,9 @@ export function init(opts: InitOptions): InitResult[] {
       changedEdit = host.edit.register(settings, editCommand(command), EDIT_HOOK_TIMEOUT_S, scope);
     }
     if (changedStop || changedEdit) writeSettings(path, settings);
-    results.push({ ...base, event: 'stop', hostEvent: host.event, action: !changedStop ? 'unchanged' : stopBefore ? 'updated' : 'added', command: registerCommand, note: host.postInstallNote });
+    // Devin loads the Claude Code file too: a native Devin entry next to it would run the checks twice.
+    const devinNote = host.name === 'claude' && alreadyRegistered(getHost('devin'), getHost('devin').settingsPath(opts.root, scope), scope) ? ` ${getHost('devin').settingsPath(opts.root, scope)} also registers isitdone natively; Devin loads both, so uninstall one of them (npx isitdone uninstall --agent devin).` : '';
+    results.push({ ...base, event: 'stop', hostEvent: host.event, action: !changedStop ? 'unchanged' : stopBefore ? 'updated' : 'added', command: registerCommand, note: devinNote ? (host.postInstallNote ?? '') + devinNote : host.postInstallNote });
     if (wantEdit && host.edit) {
       results.push({ ...base, event: 'edit', hostEvent: host.edit.event, action: !changedEdit ? 'unchanged' : editBefore ? 'updated' : 'added', command: editCommand(command), timeout: EDIT_HOOK_TIMEOUT_S, note: null });
     }
