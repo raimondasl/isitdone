@@ -99,7 +99,7 @@ One command per host. Run it inside the repository.
 | Claude Code | `npx isitdone init` | `.claude/settings.json` (Stop) |
 | Codex CLI | `npx isitdone init --agent codex` | `.codex/hooks.json` (Stop), then run `/hooks` in Codex and trust it |
 | Cursor | `npx isitdone init --agent cursor` | `.cursor/hooks.json` (stop) |
-| Gemini CLI | `npx isitdone init --agent gemini` | `.gemini/settings.json` (AfterAgent) |
+| Gemini CLI | `npx isitdone init --agent gemini` | `.gemini/settings.json` (AfterAgent); or `gemini extensions install https://github.com/raimondasl/isitdone-gemini` |
 | GitHub Copilot CLI | `npx isitdone init --agent copilot` | `.github/hooks/isitdone.json` (agentStop); restart Copilot |
 | Qwen Code | `npx isitdone init --agent qwen` | `.qwen/settings.json` (Stop) |
 | Goose | `npx isitdone init --agent goose` | `.agents/plugins/isitdone/hooks/hooks.json` (Stop) |
@@ -130,7 +130,7 @@ isitdone doctor  ~/work/demo-app
   OK   the agent cannot claim done with failing checks in this repo
 ```
 
-Claude Code users can also install it as a plugin: `/plugin marketplace add raimondasl/isitdone` then `/plugin install isitdone@isitdone`. A paste-to-agent version of these instructions is in [docs/install.md](docs/install.md).
+Claude Code users can also install it as a plugin: `/plugin marketplace add raimondasl/isitdone` then `/plugin install isitdone@isitdone`. Gemini CLI users can install it as an extension: `gemini extensions install https://github.com/raimondasl/isitdone-gemini` ([isitdone-gemini](https://github.com/raimondasl/isitdone-gemini)). A paste-to-agent version of these instructions is in [docs/install.md](docs/install.md).
 
 Add `--user` to install into your user-level settings instead of the project. `npx isitdone uninstall` removes it. Teach the agent to run it itself with `npx skills add raimondasl/isitdone` (the [`SKILL.md`](SKILL.md) is at the repo root).
 
