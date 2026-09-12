@@ -1,6 +1,6 @@
 {
   "name": "@aivolution/isitdone",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Don't let your coding agent say \"done\" until the tests actually pass. Zero-LLM Stop hook + CLI for Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, Qwen Code, Goose, Droid, Devin, Augment, OpenCode and Junie.",
   "type": "module",
   "main": "dist/index.js",

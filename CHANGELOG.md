@@ -4,6 +4,8 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-11
+
 ### Fixed
 
 - `history` (Qwen Code): a `/rewind` leaves the truncated branch in the session file; only the live `parentUuid` chain is graded now, so rewound claims no longer count.
