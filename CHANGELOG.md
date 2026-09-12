@@ -13,6 +13,7 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 ### Added
 
 - Issue templates for host hook reports, scanner mistakes and bugs; GitHub Discussions enabled.
+- `history`: every claim records `testFails`, the number of failed test runs in its turn. A VERIFIED claim whose turn also had a failure is called out in the summary and marked in `--verbose` ("after 1 failed run"), since the run that passed last may have been a narrower command than the one that failed (reported by Kevin Lozada Santos in openai/codex#44153).
 
 ## [0.4.1] - 2026-09-09
 

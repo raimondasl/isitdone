@@ -246,11 +246,13 @@ async function cmdHistory(args: Args): Promise<number> {
     out(`  ${s.red('NEVER RAN')}  ${pad(pct(report.counts.NEVER_RAN, total), 5)} no test command in the turn at all`);
     out('');
     out(`  ${s.bold(`${report.unbackedPct}% of "done" claims had no passing test run behind them.`)}`);
+    const mixed = report.claims.filter((c) => c.verdict === 'VERIFIED' && c.testFails > 0).length;
+    if (mixed > 0) out(`  ${s.yellow(`${mixed} of the verified claims had a failed test run earlier in the same turn; only the last command passed, and it may have been a narrower one (--verbose marks them).`)}`);
     const worst = [...report.byProject].filter((p) => p.claims >= 5).sort((a, b) => b.unbackedPct - a.unbackedPct)[0];
     if (worst) out(`  worst project  ${worst.project}  ${worst.unbackedPct}% unbacked (${worst.claims} claims)`);
     if (args.flags.verbose === true) {
       out('');
-      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}${c.lossy ? s.yellow('  (no exit codes)') : ''}`);
+      for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}${c.lossy ? s.yellow('  (no exit codes)') : ''}${c.verdict === 'VERIFIED' && c.testFails > 0 ? s.yellow(`  (after ${c.testFails} failed run${c.testFails === 1 ? '' : 's'})`) : ''}`);
     } else {
       out('');
       out(`  ${s.dim('per project:')}`);

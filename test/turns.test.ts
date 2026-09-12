@@ -39,6 +39,18 @@ describe('TurnTracker', () => {
     return { t, out };
   };
 
+  it('a pass after a failure in the same turn is VERIFIED but carries the failed count', () => {
+    const { t, out } = track();
+    t.edit(1);
+    t.command('c1', 'npm test', 2);
+    t.resolve('c1', false, 3);
+    t.command('c2', 'npx ava', 4);
+    t.resolve('c2', true, 5);
+    t.text('Done. All tests pass.', 6);
+    t.finalize();
+    expect(out.map((c) => [c.verdict, c.testRuns, c.testFails])).toEqual([['VERIFIED', 2, 1]]);
+  });
+
   it('follows a command whose outcome arrives under another id, and forgets a command that never ran', () => {
     const { t, out } = track();
     t.edit(1);

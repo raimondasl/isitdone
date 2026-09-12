@@ -17,6 +17,8 @@ export interface ClaimRecord {
   testRuns: number;
   /** Non-test verification commands (typecheck, lint, build) in the turn. */
   checkRuns: number;
+  /** Test runs in the turn that failed. A VERIFIED claim with testFails > 0 passed on its LAST run only; that run may have been a narrower command than the one that failed. */
+  testFails: number;
   /** Which agent wrote the transcript. */
   agent: 'claude-code' | 'codex' | 'gemini' | 'qwen' | 'cursor';
   /** The transcript carries no exit codes (Cursor agent-transcripts): every test run was assumed to have passed. */
@@ -48,6 +50,7 @@ export class TurnTracker {
   private lastEditAt = 0;
   private testRuns = 0;
   private checkRuns = 0;
+  private testFails = 0;
   private lastTest: { at: number; ok: boolean } | null = null;
   private lastText = '';
   private lastTextAt = 0;
@@ -131,6 +134,7 @@ export class TurnTracker {
   private record(kind: 'test' | 'check', ok: boolean | null, at: number): void {
     if (kind === 'test') {
       this.testRuns++;
+      if (ok === false) this.testFails++;
       this.lastTest = { at, ok: ok !== false };
     } else {
       this.checkRuns++;
@@ -184,6 +188,7 @@ export class TurnTracker {
           edits: this.edits,
           testRuns: this.testRuns,
           checkRuns: this.checkRuns,
+          testFails: this.testFails,
           agent: this.meta.agent,
         };
         if (this.meta.lossy) pushed.lossy = true;
@@ -196,6 +201,7 @@ export class TurnTracker {
     this.lastEditAt = 0;
     this.testRuns = 0;
     this.checkRuns = 0;
+    this.testFails = 0;
     this.lastTest = null;
     this.lastText = '';
     this.lastTextAt = 0;
