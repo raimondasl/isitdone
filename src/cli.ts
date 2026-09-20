@@ -9,9 +9,10 @@ import { readStdin, runEditHook, runHook } from './hook.js';
 import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
-import { formatDuration, styleFor } from './output.js';
+import { runMcpServer } from './mcp.js';
+import { styleFor } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
-import { formatMarkdown, formatReport, formatReportMarkdown, integrityBlocks, toJson } from './report.js';
+import { formatDetection, formatMarkdown, formatReceiptState, formatReport, formatReportMarkdown, integrityBlocks, receiptStateOf, toJson } from './report.js';
 import { isNewer, runUpdate } from './update.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
@@ -32,6 +33,8 @@ Usage
   ${NPX} uninstall            remove the hook(s)
   ${NPX} history              how many of your agent's past "done" claims had a test run behind them
   ${NPX} update               refresh the npx-cached hook to the latest release (--check only reports)
+  ${NPX} mcp                  (used by the IDE) Model Context Protocol server on stdio, for agents without a stop hook:
+                          tools isitdone_verify, isitdone_receipt, isitdone_detect
 
 Options for run
   --profile <lite|full>   lite = typecheck+lint only, full = everything (default: full)
@@ -174,7 +177,7 @@ async function cmdRun(args: Args): Promise<number> {
     onCheckStart: live ? (c) => process.stdout.write(s.dim(`  running ${c.cmd} ...`)) : undefined,
     onCheckDone: live ? () => process.stdout.write(`\r${' '.repeat(70)}\r`) : undefined,
   });
-  const state = res.receipt ? (res.receipt.status === 'PASS' ? 'PASS' : 'FAIL') : res.cached ? 'PASS' : 'NONE';
+  const state = receiptStateOf(res);
   if (typeof args.flags.sarif === 'string' && res.integrity) {
     writeFileSync(resolve(args.flags.sarif), JSON.stringify(toSarif(res.integrity, { base: typeof args.flags.base === 'string' ? args.flags.base : 'HEAD' }), null, 2) + '\n');
   }
@@ -282,16 +285,7 @@ async function cmdReceipt(args: Args): Promise<number> {
     if (!ev.receipt) out(`No isitdone receipt (${ev.reason}). Run \`${NPX}\`.`);
     else out(formatMarkdown(ev.receipt, ev.state));
   } else {
-    const color = ev.state === 'PASS' ? s.green : ev.state === 'FAIL' ? s.red : s.yellow;
-    const label = ev.state === 'PASS' && ev.receipt?.profile === 'lite' ? 'PASS (lite)' : ev.state;
-    out(`${s.bold('isitdone receipt')}  ${color(s.bold(label))}  ${s.dim(ev.reason)}`);
-    if (ev.receipt) {
-      const r = ev.receipt;
-      out(`  ${s.dim(`created ${r.createdAt} on ${r.branch ?? 'detached'}@${(r.head ?? '').slice(0, 7)} tree ${r.tree.slice(0, 7)}, profile ${r.profile}${r.host ? `, host ${r.host}` : ''}`)}`);
-      for (const c of r.checks) out(`  ${c.cmd}  ${c.status === 'PASS' ? s.green('PASS') : s.red(c.status)}  ${s.dim(formatDuration(c.durationMs))}  ${s.dim(c.summary ?? '')}`.trimEnd());
-      if (r.claim) out(`  ${s.dim('claim: ' + JSON.stringify(r.claim))}`);
-      if (ev.state === 'PASS' && r.profile === 'lite') out(`  ${s.yellow('tests were not run; run `' + NPX + '` for a full receipt')}`);
-    }
+    out(formatReceiptState(ev, s, `run \`${NPX}\``));
   }
   return done ? 0 : 1;
 }
@@ -304,12 +298,13 @@ function cmdDetect(args: Args): number {
     out(JSON.stringify({ root, configSource: source, stacks: d.stacks, checks: d.checks.map((c) => ({ ...c, timeoutSeconds: timeoutFor(c, config) / 1000 })), env: d.env, notes: d.notes }, null, 2));
     return 0;
   }
-  const s = styleFor(process.stdout);
-  out(`${s.bold('isitdone detect')}  ${s.dim(root)}${source ? s.dim(`  (config: ${source})`) : ''}`);
-  if (d.checks.length === 0) out(`  ${s.yellow('no checks detected')}`);
-  for (const c of d.checks) out(`  ${s.cyan(c.id.padEnd(10))} ${c.cmd.padEnd(32)} ${s.dim(`${c.kind}  ${timeoutFor(c, config) / 1000}s  from ${c.source}`)}`);
-  for (const n of d.notes) out(`  ${s.dim('note: ' + n)}`);
+  out(formatDetection(root, d, config, source, styleFor(process.stdout)));
   return 0;
+}
+
+/** The MCP server owns stdin/stdout until the client closes stdin. */
+async function cmdMcp(args: Args): Promise<number> {
+  return runMcpServer({ cwd: typeof args.flags.cwd === 'string' ? resolve(args.flags.cwd) : undefined });
 }
 
 async function cmdHook(args: Args): Promise<number> {
@@ -497,6 +492,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdHistory(args);
       case 'update':
         return cmdUpdate(args);
+      case 'mcp':
+        return await cmdMcp(args);
       default:
         err(`isitdone: unknown command "${args.command}"\n`);
         err(HELP);

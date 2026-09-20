@@ -43,6 +43,7 @@ describe('cli end-to-end', () => {
     const h = cli(['--help'], process.cwd());
     expect(h.code).toBe(0);
     expect(h.stdout).toMatch(/npx isitdone init/);
+    expect(h.stdout).toMatch(/npx isitdone mcp/);
     expect(cli(['bogus'], process.cwd()).code).toBe(3);
     const unknown = cli(['--nope'], process.cwd());
     expect(unknown.code).toBe(3);

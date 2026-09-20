@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatBlockReason, formatMarkdown, formatReport, toJson } from '../src/report.js';
@@ -54,6 +54,29 @@ describe('verify', () => {
     expect(full.ran.map((r) => r.id)).toEqual(['lint', 'test']);
     const liteAgain = await verify({ root: repo.root, config: {}, profile: 'lite' });
     expect(liteAgain.cached).toBe(true);
+  });
+
+  it('a lite run that reuses a lite receipt says OK (lite), never DONE', async () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS, lint: PASS }) } });
+    await verify({ root: repo.root, config: {}, profile: 'lite' });
+    const again = await verify({ root: repo.root, config: {}, profile: 'lite' });
+    expect(again.cached).toBe(true);
+    expect(toJson(again, 'PASS').done).toBe(false);
+    const report = formatReport(again, plain);
+    expect(report).toMatch(/OK \(lite\) {3}lite checks passed on this exact tree/);
+    expect(report).not.toMatch(/\bDONE\b/);
+  });
+
+  it('an aborted run skips what is left, is not ok, and writes no receipt', async () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS, lint: PASS }) } });
+    const abort = new AbortController();
+    const res = await verify({ root: repo.root, config: {}, profile: 'full', signal: abort.signal, onCheckDone: () => abort.abort() });
+    expect(res.ok).toBe(false);
+    expect(res.ran.map((r) => r.id)).toEqual(['lint']);
+    expect(res.skipped.map((s) => `${s.check.id}:${s.reason}`)).toEqual(['test:cancelled']);
+    expect(res.receipt).toBeNull();
+    expect(res.warnings.join(' ')).toMatch(/cancelled; no receipt was written/);
+    expect(existsSync(join(repo.root, '.isitdone', 'receipt.json'))).toBe(false);
   });
 
   it('fails, writes a FAIL receipt, and skips full checks after a lite failure unless --all', async () => {

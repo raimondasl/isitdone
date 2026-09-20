@@ -6,7 +6,7 @@
 
 *Rendered from a real run (`npm run demo`): the agent lines are narration; the hook and CLI output are captured as-is, with only the temporary path shortened.*
 
-`isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor, Gemini CLI, GitHub Copilot CLI, Qwen Code, Goose, Factory Droid, Devin, Augment, OpenCode and Junie CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, scans the diff for weakened tests, and refuses the stop until they pass. It also tells the agent mid-turn when an edit just weakened a test, runs the same verification on pull requests as a GitHub Action, and leaves a git-bound receipt you can paste into a PR.
+`isitdone` is a zero-LLM, zero-dependency Stop hook and CLI for Claude Code, Codex CLI, Cursor, Gemini CLI, GitHub Copilot CLI, Qwen Code, Goose, Factory Droid, Devin, Augment, OpenCode and Junie CLI. When the agent tries to end its turn claiming the work is complete, `isitdone` runs the repository's *real* test, typecheck and lint commands on the *exact* working tree, scans the diff for weakened tests, and refuses the stop until they pass. It also tells the agent mid-turn when an edit just weakened a test, runs the same verification on pull requests as a GitHub Action, offers it as an [MCP server](#mcp-server) to agents that have no stop hook, and leaves a git-bound receipt you can paste into a PR.
 
 ```
 npx isitdone init
@@ -180,6 +180,56 @@ jobs:
 
 Listed on the [GitHub Marketplace as isitdone verify](https://github.com/marketplace/actions/isitdone-verify). It runs the repo's checks, scans the diff against the PR base for weakened tests (strict by default: high/critical findings fail the job even when the checks pass), writes the receipt to the job summary, keeps one updated comment on the PR, and can upload the findings as SARIF (`with: { sarif: 'true' }`, needs `security-events: write` on push events). On pull requests from forks the default token is read-only, so the comment is skipped and the job summary carries the receipt; pass a `token` with write access (a PAT or a GitHub App token) or run on `pull_request_target` to comment there too. `base` accepts a branch (default: the PR base), a commit sha, a tag or a qualified ref. Inputs: `version`, `base`, `strict`, `comment`, `sarif`, `token`, `args`, `command`; outputs: `status`, `report`, `json` (the path of the `--json-file` result).
 
+## MCP server
+
+For agents and IDEs that have no stop hook a program can block (VS Code Copilot agent mode, Cline, Windsurf Cascade, Kiro, Zed, JetBrains AI Assistant, Claude Desktop, Amp, Crush, Roo Code), the same verification is available as a Model Context Protocol server:
+
+```
+npx -y @aivolution/isitdone mcp
+```
+
+**This is the weaker of the two integrations, and it is meant to be.** A hook is enforced by the host: the agent cannot end its turn until the checks pass, whether it wants to or not. An MCP tool runs only when the model decides to call it, and a model that skips the call claims "done" exactly as before. If your agent is in the [Install](#install) table, use the hook (you can run both: they share the receipt). Where there is no hook, a tool the model is told to call still beats a sentence nobody checked.
+
+It offers three tools, and its server instructions tell the model to call `isitdone_verify` before saying that work is complete, to paste the result, and never to weaken tests to make it pass:
+
+| Tool | Arguments | What it returns |
+|---|---|---|
+| `isitdone_verify` | `cwd?`, `profile?` (`lite` \| `full`), `claim?`, `base?`, `strict?` | The `npx isitdone` run: `done` true/false, every check's status, the tail of the failing output, the test-integrity findings, the receipt state. NOT DONE is a normal result (`isError` stays false), so the model reads it and keeps working. |
+| `isitdone_receipt` | `cwd?` | `PASS`, `FAIL`, `STALE` or `NONE` for the current tree. Runs nothing. |
+| `isitdone_detect` | `cwd?` | The checks that would run, and where each was detected. Runs nothing. |
+
+Every result is a plain-text report plus the same facts as `structuredContent` (with an `outputSchema`) for clients that read it. Without a `cwd` argument the server uses the client's first workspace root (`roots`), then the directory it was started in.
+
+VS Code, in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "isitdone": { "type": "stdio", "command": "npx", "args": ["-y", "@aivolution/isitdone", "mcp"] }
+  }
+}
+```
+
+Cursor (`.cursor/mcp.json`), Claude Desktop (`claude_desktop_config.json`, under Settings, Developer), Cline (MCP Servers, Configure: `cline_mcp_settings.json`) and Windsurf (`~/.codeium/windsurf/mcp_config.json`) share one shape:
+
+```json
+{
+  "mcpServers": {
+    "isitdone": { "command": "npx", "args": ["-y", "@aivolution/isitdone", "mcp"] }
+  }
+}
+```
+
+Claude Code:
+
+```
+claude mcp add isitdone -- npx -y @aivolution/isitdone mcp
+```
+
+Cursor and Claude Code have real hooks, so there the MCP server is a convenience (the agent can ask for the receipt mid-task), not the gate: keep `npx isitdone init`. On Windows, a client that cannot start `npx` directly takes `"command": "cmd", "args": ["/c", "npx", "-y", "@aivolution/isitdone", "mcp"]`. Claude Desktop has no workspace, so the model has to pass `cwd`. Since nothing forces the call, say it in the agent's rules file as well (`.github/copilot-instructions.md`, `.clinerules`, `.windsurfrules`, `AGENTS.md`): *"Before you tell me work is done, call the isitdone_verify tool and paste its result."*
+
+Details that matter in practice: one verification runs at a time per repository, and a second identical call gets the result of the run in flight; when a client gives up on a slow suite (`notifications/cancelled` after its own tool timeout) the run still finishes and leaves its receipt, so the model's retry is answered at once instead of timing out again; progress notifications are sent per check for clients that ask for them; when the client closes stdin the running check is killed and the server exits. Checks run on pipes, so nothing a test prints can reach the protocol stream. The server is written against the wire format (newline-delimited JSON-RPC 2.0, no SDK, still zero dependencies) and speaks the handshake revisions `2024-11-05`, `2025-03-26`, `2025-06-18` and `2025-11-25` as well as the stateless `2026-07-28` revision (`server/discover`, per-request `_meta`, roots through `input_required`). [`server.json`](server.json) describes it for the official MCP Registry as `io.github.raimondasl/isitdone`; the release workflow publishes it there.
+
 ## How it decides
 
 1. **Detect.** Reads `package.json` scripts (`test`, `typecheck`, `lint`, `build`; npm, pnpm, yarn, bun, deno), `pyproject.toml`/`pytest.ini`/`requirements.txt` (pytest, ruff, flake8, mypy, pyright; uv/poetry/pipenv runners), `go.mod` (`go vet`, `go test ./...`), `Cargo.toml` (`cargo check`, `cargo test`), .NET solutions, Gradle/Maven, and `Makefile` targets. Anything can be overridden in `.isitdone.json`.
@@ -210,6 +260,7 @@ npx isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor
                                   devin | augment | opencode | junie | all | auto)
 npx isitdone doctor               prove the installed hook blocks; show detected checks and host notes
 npx isitdone uninstall            remove the hook(s)
+npx isitdone mcp                  MCP server on stdio for agents without a stop hook (started by the IDE, see "MCP server")
 ```
 
 For orchestrators and agent loops, `npx isitdone --json` is a done-predicate: `done` is `true` only when every full check passed on the current tree. Exit codes: `0` done, `1` not done, `3` usage or internal error.
@@ -259,7 +310,7 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 ## Roadmap
 
 - **v0.5** A `--related` mode that runs only the tests touching the changed files for slow suites; Cline (a PreToolUse gate on `attempt_completion`) and Amp (`agent.end` plugin) adapters; a native OpenCode hook once `session.stopping` ships, and Windsurf/Cascade once its hooks can block; `history` for OpenCode's database; Kotest/Spek DSLs; a detector for expected values bent to match a regression.
-- Not planned: Roo Code and Kilo Code (no hooks), Kiro (its Stop trigger cannot block), Crush (PreToolUse only). Aider has no hooks but `aider --auto-test --test-cmd "npx isitdone"` feeds the same verdict back after every edit.
+- No hook adapter planned: Roo Code and Kilo Code (no hooks), Kiro (its Stop trigger cannot block), Crush (PreToolUse only); they are served by the [MCP server](#mcp-server) instead. Aider has no hooks but `aider --auto-test --test-cmd "npx isitdone"` feeds the same verdict back after every edit.
 
 ## Development
 

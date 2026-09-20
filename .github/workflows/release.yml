@@ -5,6 +5,10 @@ name: release
 #   package settings -> Trusted publisher -> GitHub Actions
 #   owner: raimondasl   repository: isitdone   workflow filename: release.yml   environment: (leave empty)
 # Packages: @aivolution/isitdone (repo root) and isitdone (alias/). A version that already exists is skipped.
+#
+# The last steps list the MCP server (`isitdone mcp`) in the official MCP Registry from server.json. No secret either:
+# the job's GitHub OIDC token proves it runs in a raimondasl/* repository, which owns the io.github.raimondasl/ namespace,
+# and the registry checks that the npm package published above names the server in its "mcpName" field.
 
 on:
   push:
@@ -62,3 +66,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes || echo "release already exists"
+      # After npm, because the registry reads "mcpName" from the published package. It must never fail a release that npm
+      # already has: a registry outage (or npm still propagating) ends in a warning, and the step can simply be re-run.
+      - name: publish server.json to the MCP Registry
+        id: mcp_registry
+        continue-on-error: true
+        run: |
+          node scripts/sync-server-json.mjs
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz -C "${RUNNER_TEMP}" mcp-publisher
+          "${RUNNER_TEMP}/mcp-publisher" login github-oidc
+          for attempt in 1 2 3; do
+            if "${RUNNER_TEMP}/mcp-publisher" publish; then exit 0; fi
+            echo "mcp-publisher publish failed (attempt ${attempt} of 3); npm may still be propagating, waiting 30s"
+            sleep 30
+          done
+          exit 1
+      - name: warn if the MCP Registry was not updated
+        if: steps.mcp_registry.outcome == 'failure'
+        run: |
+          echo "::warning title=MCP Registry::server.json was not published (registry down, npm had not propagated the new version yet, or this version is already listed; see the step log). Re-running this job is safe, the npm steps skip a version that already exists."

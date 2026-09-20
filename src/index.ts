@@ -27,4 +27,6 @@ export { checkEditedFile, formatEditNote } from './editcheck.js';
 export type { EditCheck } from './editcheck.js';
 export { toSarif } from './sarif.js';
 export { formatReport, formatBlockReason, formatMarkdown, toJson } from './report.js';
+export { McpServer, runMcpServer, SUPPORTED_VERSIONS as MCP_PROTOCOL_VERSIONS } from './mcp.js';
+export type { McpServerOptions } from './mcp.js';
 export { VERSION } from './version.js';

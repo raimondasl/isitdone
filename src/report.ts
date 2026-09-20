@@ -1,8 +1,10 @@
+import type { IsitdoneConfig } from './config.js';
+import type { Detection } from './detect.js';
 import { formatSummaryLine, type Finding, type IntegrityReport } from './integrity.js';
 import { formatDuration, pad, type Style } from './output.js';
-import type { Receipt } from './receipt.js';
+import type { Receipt, ReceiptEvaluation } from './receipt.js';
 import type { RunResult } from './run.js';
-import type { VerifyResult } from './verify.js';
+import { timeoutFor, type VerifyResult } from './verify.js';
 import { VERSION } from './version.js';
 
 function statusWord(r: RunResult): string {
@@ -72,7 +74,9 @@ export function formatReport(res: VerifyResult, s: Style): string {
     const integrity = formatIntegrity(res, s);
     if (integrity.length) lines.push('', ...integrity);
     lines.push('');
-    lines.push(`  ${s.green(s.bold('DONE'))}   receipt -> PASS (tree ${res.receipt.tree.slice(0, 7)}, ${res.receipt.checks.length} checks, cached)`);
+    // A lite receipt only proves typecheck/lint: reusing it is OK for a lite run, never "DONE".
+    if (res.receipt.profile === 'lite') lines.push(`  ${s.yellow(s.bold('OK (lite)'))}   lite checks passed on this exact tree (tree ${res.receipt.tree.slice(0, 7)}, cached); full checks not run`);
+    else lines.push(`  ${s.green(s.bold('DONE'))}   receipt -> PASS (tree ${res.receipt.tree.slice(0, 7)}, ${res.receipt.checks.length} checks, cached)`);
     for (const w of res.warnings) lines.push(`  ${s.yellow('warning: ' + w)}`);
     return lines.join('\n');
   }
@@ -170,6 +174,30 @@ export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempt
   return lines.join('\n');
 }
 
+/** `isitdone receipt` for humans; the MCP isitdone_receipt tool prints the same lines. `fullRun` is how to get a full receipt. */
+export function formatReceiptState(ev: ReceiptEvaluation, s: Style, fullRun: string): string {
+  const color = ev.state === 'PASS' ? s.green : ev.state === 'FAIL' ? s.red : s.yellow;
+  const label = ev.state === 'PASS' && ev.receipt?.profile === 'lite' ? 'PASS (lite)' : ev.state;
+  const lines = [`${s.bold('isitdone receipt')}  ${color(s.bold(label))}  ${s.dim(ev.reason)}`];
+  if (ev.receipt) {
+    const r = ev.receipt;
+    lines.push(`  ${s.dim(`created ${r.createdAt} on ${r.branch ?? 'detached'}@${(r.head ?? '').slice(0, 7)} tree ${r.tree.slice(0, 7)}, profile ${r.profile}${r.host ? `, host ${r.host}` : ''}`)}`);
+    for (const c of r.checks) lines.push(`  ${c.cmd}  ${c.status === 'PASS' ? s.green('PASS') : s.red(c.status)}  ${s.dim(formatDuration(c.durationMs))}  ${s.dim(c.summary ?? '')}`.trimEnd());
+    if (r.claim) lines.push(`  ${s.dim('claim: ' + JSON.stringify(r.claim))}`);
+    if (ev.state === 'PASS' && r.profile === 'lite') lines.push(`  ${s.yellow(`tests were not run; ${fullRun} for a full receipt`)}`);
+  }
+  return lines.join('\n');
+}
+
+/** `isitdone detect` for humans; the MCP isitdone_detect tool prints the same lines. */
+export function formatDetection(root: string, d: Detection, config: IsitdoneConfig, source: string | null, s: Style): string {
+  const lines = [`${s.bold('isitdone detect')}  ${s.dim(root)}${source ? s.dim(`  (config: ${source})`) : ''}`];
+  if (d.checks.length === 0) lines.push(`  ${s.yellow('no checks detected')}`);
+  for (const c of d.checks) lines.push(`  ${s.cyan(c.id.padEnd(10))} ${c.cmd.padEnd(32)} ${s.dim(`${c.kind}  ${timeoutFor(c, config) / 1000}s  from ${c.source}`)}`);
+  for (const n of d.notes) lines.push(`  ${s.dim('note: ' + n)}`);
+  return lines.join('\n');
+}
+
 function mdCell(s: string): string {
   return s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
@@ -250,6 +278,11 @@ export function formatReportMarkdown(res: VerifyResult, state: string): string {
   const tree = g.tree.slice(0, 7);
   lines.push(`<sub>Tree ${tree}${g.head ? ` on ${g.branch ?? 'detached'}@${g.head.slice(0, 7)}` : ''}${g.dirtyFiles ? ` (+${g.dirtyFiles} uncommitted)` : ''} · receipt ${state} · isitdone ${VERSION}</sub>`);
   return lines.join('\n');
+}
+
+/** The receipt a run wrote or reused: PASS, FAIL, or NONE when nothing was written (no checks, doctor mode, cancelled). */
+export function receiptStateOf(res: VerifyResult): 'PASS' | 'FAIL' | 'NONE' {
+  return res.receipt ? (res.receipt.status === 'PASS' ? 'PASS' : 'FAIL') : res.cached ? 'PASS' : 'NONE';
 }
 
 /** Stable machine-readable summary. */
