@@ -60,6 +60,22 @@ describe('runCheck', () => {
     expect(r.lines).toBe(3);
   });
 
+  it('an abort signal kills the check and reports it as cancelled, before or during the run', async () => {
+    const abort = new AbortController();
+    const started = Date.now();
+    const running = runCheck(check(SLOW), { cwd, timeoutMs: 30_000, signal: abort.signal });
+    setTimeout(() => abort.abort(), 500);
+    const r = await running;
+    expect(r.status).toBe('ERROR');
+    expect(r.summary).toBe('cancelled');
+    expect(r.tail).toContain('(cancelled)');
+    expect(Date.now() - started).toBeLessThan(15_000);
+    const already = await runCheck(check(SLOW), { cwd, timeoutMs: 30_000, signal: abort.signal });
+    expect(already.summary).toBe('cancelled');
+    // A signal that never fires changes nothing.
+    expect((await runCheck(check(PASS), { cwd, timeoutMs: 10_000, signal: new AbortController().signal })).status).toBe('PASS');
+  });
+
   it('reports ERROR-ish failure for a missing command', async () => {
     const r = await runCheck(check('definitely-not-a-real-command-xyz --flag'), { cwd, timeoutMs: 10_000 });
     expect(['FAIL', 'ERROR']).toContain(r.status);

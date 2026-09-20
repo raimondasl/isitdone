@@ -28,6 +28,8 @@ export interface VerifyOptions {
   base?: string;
   /** CI mode for the integrity scan: new suppressions are findings. */
   ci?: boolean;
+  /** Abort the run: the running check is killed, the remaining ones are skipped, and no receipt is written. */
+  signal?: AbortSignal;
   onCheckStart?: (check: Check) => void;
   onCheckDone?: (result: RunResult) => void;
   onOutput?: (check: Check, chunk: string) => void;
@@ -135,6 +137,10 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const ran: RunResult[] = [];
   let liteFailed = false;
   for (const check of wanted) {
+    if (opts.signal?.aborted) {
+      skipped.push({ check, reason: 'cancelled' });
+      continue;
+    }
     if (check.kind === 'full' && liteFailed && !opts.all) {
       skipped.push({ check, reason: 'skipped because a lite check failed (use --all to run anyway)' });
       continue;
@@ -145,17 +151,21 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       timeoutMs: timeoutFor(check, opts.config),
       env,
       onOutput: opts.onOutput ? (chunk) => opts.onOutput?.(check, chunk) : undefined,
+      signal: opts.signal,
     });
     ran.push(result);
     opts.onCheckDone?.(result);
     if (result.status !== 'PASS' && check.kind === 'lite') liteFailed = true;
   }
 
-  const ok = ran.every((r) => r.status === 'PASS');
+  // A cancelled run proves nothing either way: it is not ok, and it must not leave a FAIL receipt behind.
+  const cancelled = opts.signal?.aborted ?? false;
+  if (cancelled) warnings.push('verification was cancelled; no receipt was written');
+  const ok = !cancelled && ran.every((r) => r.status === 'PASS');
   const fullRan = detection.checks.filter((c) => c.kind === 'full').every((c) => ran.some((r) => r.id === c.id));
 
   let receipt: Receipt | null = null;
-  if (!opts.dryRun) {
+  if (!opts.dryRun && !cancelled) {
     // Checks may write files (coverage, build output). Bind the receipt to the tree as it is now,
     // and remember the pre-run tree so either matches on the next stop.
     const after = git.isRepo ? gitInfo(root) : git;

@@ -27,6 +27,8 @@ export interface RunOptions {
   tailLines?: number;
   env?: NodeJS.ProcessEnv;
   onOutput?: (chunk: string) => void;
+  /** Abort the check: its process tree is killed and the result is ERROR with the summary "cancelled". */
+  signal?: AbortSignal;
 }
 
 /** Longest partial line kept in memory; progress bars without newlines are truncated from the left. */
@@ -173,6 +175,7 @@ export function runCheck(check: Check, opts: RunOptions): Promise<RunResult> {
   return new Promise((resolve) => {
     let finished = false;
     let timedOut = false;
+    let cancelled = false;
     let exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let graceTimer: NodeJS.Timeout | null = null;
     let killTimer: NodeJS.Timeout | null = null;
@@ -200,6 +203,7 @@ export function runCheck(check: Check, opts: RunOptions): Promise<RunResult> {
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
       if (killTimer) clearTimeout(killTimer);
+      opts.signal?.removeEventListener('abort', onAbort);
       // A grandchild may still hold the pipes open: release them so the event loop can drain.
       try {
         child.stdout?.destroy();
@@ -218,12 +222,13 @@ export function runCheck(check: Check, opts: RunOptions): Promise<RunResult> {
         tail: lines,
         lines: tail.lines,
       };
-      const summary = extractSummary(lines);
+      const summary = cancelled ? 'cancelled' : extractSummary(lines);
       if (summary) result.summary = summary;
       resolve(result);
     };
 
     const settle = () => {
+      if (cancelled) return done('ERROR', exited?.code ?? null);
       if (timedOut) return done('TIMEOUT', exited?.code ?? null);
       if (!exited) return done('ERROR', null);
       if (exited.code === 0) return done('PASS', 0);
@@ -251,5 +256,16 @@ export function runCheck(check: Check, opts: RunOptions): Promise<RunResult> {
       if (!exited) exited = { code, signal };
       settle();
     });
+
+    // The caller is going away (the MCP server's client closed the connection): take the check down with us.
+    function onAbort(): void {
+      if (finished || cancelled) return;
+      cancelled = true;
+      tail.push('(cancelled)\n');
+      if (child.pid) killTree(child.pid);
+      if (!killTimer) killTimer = setTimeout(settle, KILL_GRACE_MS);
+    }
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

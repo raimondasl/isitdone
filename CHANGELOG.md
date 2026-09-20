@@ -4,6 +4,18 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- `isitdone mcp`: a Model Context Protocol server on stdio for agents and IDEs that have no blocking stop hook (VS Code Copilot agent mode, Cline, Windsurf Cascade, Kiro, Zed, JetBrains, Claude Desktop, Amp, Crush). Three tools: `isitdone_verify` (`cwd`, `profile`, `claim`, `base`, `strict`; the same run as the CLI, returning `done`, per-check status, the failing output tail, the test-integrity findings and the receipt state; NOT DONE is a result, `isError` stays false), `isitdone_receipt` (PASS | FAIL | STALE | NONE for the current tree) and `isitdone_detect` (which checks would run). Every tool returns a text report, plus `structuredContent` with an `outputSchema` where the negotiated revision has them. The server instructions tell the model to verify before claiming completion, to paste the result, and never to weaken tests. Written against the wire format (newline-delimited JSON-RPC 2.0), so the package still has no dependencies. A tool the model chooses to call is weaker than a hook the host enforces: hosts with a hook should keep using it.
+- MCP protocol coverage: the handshake revisions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 (version negotiation, `ping`, tool shapes trimmed to what each revision knows, workspace roots through `roots/list`) and the stateless 2026-07-28 revision (`server/discover`, per-request `_meta` with `UnsupportedProtocolVersionError`, `resultType`, `ttlMs`/`cacheScope`, roots through an `input_required` result). Unknown methods answer -32601, malformed JSON -32700, and notifications are never answered.
+- MCP behaviour under load: one verification at a time per repository, and an identical concurrent call gets the result of the run in flight; a `notifications/cancelled` (a client-side tool timeout) drops the answer but lets the run finish and write its receipt, so the retry is immediate; progress notifications per check for requests that carry a `progressToken`; when stdin closes, the running check's process tree is killed, no receipt is written, and the server exits. `ISITDONE=1` makes `isitdone_verify` refuse, as the CLI does. Nothing a check prints can reach the protocol stream.
+- `server.json` for the official MCP Registry (`io.github.raimondasl/isitdone`, npm package `@aivolution/isitdone`, stdio, `npx ... mcp`) and the `mcpName` field in `package.json` that the registry uses to verify npm ownership. The release workflow publishes it after npm with `mcp-publisher login github-oidc` (no secret); a registry outage produces a warning, never a failed release. `node scripts/sync-server-json.mjs` keeps its version on `package.json` (`--check` runs in the test suite).
+- `verify()` and `runCheck()` accept an `AbortSignal`: the running check is killed, the rest are skipped, and no receipt is written.
+
+### Fixed
+
+- A lite run that reuses a lite PASS receipt printed `DONE`; it now prints `OK (lite)`, like the run that wrote the receipt (`--json` already said `done: false`).
+
 ## [0.4.2] - 2026-09-11
 
 ### Fixed

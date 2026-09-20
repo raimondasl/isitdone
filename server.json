@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.raimondasl/isitdone",
+  "title": "isitdone",
+  "description": "Make a coding agent prove it: run the repo's real tests, typecheck and lint before it says done.",
+  "repository": {
+    "url": "https://github.com/raimondasl/isitdone",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/raimondasl/isitdone#readme",
+  "version": "0.4.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@aivolution/isitdone",
+      "version": "0.4.2",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}
