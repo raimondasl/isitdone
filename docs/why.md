@@ -53,7 +53,7 @@ Running a two-minute test suite every time the agent pauses to ask a question wo
 
 Once tests gate the turn, a second failure mode shows up: the quickest route to green is sometimes to weaken the test. `it.skip`. A deleted test file. `toStrictEqual` quietly becoming `toEqual`. `|| true` appended to the test script. `-DskipTests` in the CI file.
 
-So isitdone also scans the diff for those, in JavaScript/TypeScript, Python, Go, Rust, Java/Kotlin and C#, and warns right after the edit that did it, while the agent can still undo it. It is line-and-regex scanning with a published detector list, not an AST, and it will miss clever cases. What I can say is how it behaves on a labelled corpus of 174 legitimate refactors and tampering cases that lives in the repository: 100% precision, 99% recall, and the one known miss is documented. It warns by default; strict mode blocks.
+So isitdone also scans the diff for those, in JavaScript/TypeScript, Python, Go, Rust, Java/Kotlin and C#, and warns right after the edit that did it, while the agent can still undo it. It is line-and-regex scanning with a published detector list, not an AST, and it will miss clever cases. What I can say is how it behaves on a labelled corpus of more than 170 legitimate refactors and tampering cases that lives in the repository: 100% precision, 99% recall, and the one known miss is documented. It warns by default; strict mode blocks.
 
 ## Receipts
 
