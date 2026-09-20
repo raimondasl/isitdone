@@ -4,6 +4,8 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-19
+
 ### Added
 
 - `isitdone mcp`: a Model Context Protocol server on stdio for agents and IDEs that have no blocking stop hook (VS Code Copilot agent mode, Cline, Windsurf Cascade, Kiro, Zed, JetBrains, Claude Desktop, Amp, Crush). Three tools: `isitdone_verify` (`cwd`, `profile`, `claim`, `base`, `strict`; the same run as the CLI, returning `done`, per-check status, the failing output tail, the test-integrity findings and the receipt state; NOT DONE is a result, `isError` stays false), `isitdone_receipt` (PASS | FAIL | STALE | NONE for the current tree) and `isitdone_detect` (which checks would run). Every tool returns a text report, plus `structuredContent` with an `outputSchema` where the negotiated revision has them. The server instructions tell the model to verify before claiming completion, to paste the result, and never to weaken tests. Written against the wire format (newline-delimited JSON-RPC 2.0), so the package still has no dependencies. A tool the model chooses to call is weaker than a hook the host enforces: hosts with a hook should keep using it.
@@ -15,6 +17,12 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 ### Fixed
 
 - A lite run that reuses a lite PASS receipt printed `DONE`; it now prints `OK (lite)`, like the run that wrote the receipt (`--json` already said `done: false`).
+- Scanner: `expect(`${a}-${b}`)` is no longer reported as an assertion on a constant (an interpolated template literal only looks empty once strings are blanked).
+
+### Documentation
+
+- `docs/agent-hooks.md`: a vendor-neutral reference for end-of-turn hooks across the twelve supported agents (config files, payloads, how to block, loop flags, timeouts, post-edit channels), the agents without a usable gate and their nearest alternative, and the rules a portable stop hook should follow. `docs/agent-hooks.json` carries the comparison table as data; a test pins both to `src/hosts.ts`.
+- `docs/why.md`: the long-form case for a gate at the moment of the claim.
 
 ## [0.4.2] - 2026-09-11
 

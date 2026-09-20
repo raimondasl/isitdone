@@ -1196,7 +1196,9 @@ function scanTestFile(ctx: Ctx, opts: ScanOptions, cross: CrossFile, movedPair: 
 
       const taut = lang === 'other' ? null : TAUTOLOGY[lang];
       const tautRaw = TAUTOLOGY_RAW[lang];
-      if ((taut && taut.test(code)) || (tautRaw && tautRaw.test(stripComment(lang, line.text)))) add(ctx, 'tautology-added', 'high', line, 'assertion that can never fail', line.text, sup);
+      // Strings are blanked in `code`, so expect(`${a}-${b}`) looks like an empty template; an interpolated one is not a constant.
+      const interpolated = lang === 'js' && /\bexpect\s*\(\s*`[^`]*\$\{/.test(line.text);
+      if ((taut && taut.test(code) && !interpolated) || (tautRaw && tautRaw.test(stripComment(lang, line.text)))) add(ctx, 'tautology-added', 'high', line, 'assertion that can never fail', line.text, sup);
 
       if (lang === 'js') {
         // expect.assertions(0), or a lowered count, lets a test pass when its assertions never run.

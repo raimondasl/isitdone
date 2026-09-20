@@ -49,6 +49,16 @@ You can paste this into your coding agent:
 
    and paste the output (or `npx isitdone receipt --md`) into your final message.
 
+## Agents without a stop hook (MCP)
+
+VS Code Copilot agent mode, Cline, Windsurf, Zed, Claude Desktop and other MCP clients can call isitdone as a tool instead. Register the server:
+
+```json
+{ "servers": { "isitdone": { "type": "stdio", "command": "npx", "args": ["-y", "@aivolution/isitdone", "mcp"] } } }
+```
+
+It exposes `isitdone_verify`, `isitdone_receipt` and `isitdone_detect`. A tool the model chooses to call is weaker than a hook the host enforces, so keep the hook wherever the agent has one.
+
 ## Claude Code plugin (alternative to `init`)
 
 ```

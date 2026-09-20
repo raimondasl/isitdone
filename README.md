@@ -130,7 +130,7 @@ isitdone doctor  ~/work/demo-app
   OK   the agent cannot claim done with failing checks in this repo
 ```
 
-Claude Code users can also install it as a plugin: `/plugin marketplace add raimondasl/isitdone` then `/plugin install isitdone@isitdone`. Gemini CLI users can install it as an extension: `gemini extensions install https://github.com/raimondasl/isitdone-gemini` ([isitdone-gemini](https://github.com/raimondasl/isitdone-gemini)). A paste-to-agent version of these instructions is in [docs/install.md](docs/install.md).
+Claude Code users can also install it as a plugin: `/plugin marketplace add raimondasl/isitdone` then `/plugin install isitdone@isitdone`. Gemini CLI users can install it as an extension: `gemini extensions install https://github.com/raimondasl/isitdone-gemini` ([isitdone-gemini](https://github.com/raimondasl/isitdone-gemini)). A paste-to-agent version of these instructions is in [docs/install.md](docs/install.md). How each of these agents' end-of-turn hooks works (config file, payload, how to block, loop flags) is written up vendor-neutrally in [docs/agent-hooks.md](docs/agent-hooks.md), with the same table as data in [docs/agent-hooks.json](docs/agent-hooks.json).
 
 Add `--user` to install into your user-level settings instead of the project. `npx isitdone uninstall` removes it. Teach the agent to run it itself with `npx skills add raimondasl/isitdone` (the [`SKILL.md`](SKILL.md) is at the repo root).
 

@@ -484,5 +484,17 @@
       ]
     },
     "note": "a new test counts invocations with a local counter that the code under test increments; the counter is not a constant"
+  },
+  {
+    "id": "js-template-literal-subject-legit-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "test/label.test.ts": [
+        "import { expect, it } from 'vitest'\nimport { label } from '../src/label'\n\nit('labels a range', () => {\n  expect(label(1, 3)).toBe('1-3')\n})",
+        "import { expect, it } from 'vitest'\nimport { label, parts } from '../src/label'\n\nit('labels a range', () => {\n  expect(label(1, 3)).toBe('1-3')\n})\n\nit('joins the parts it reports', () => {\n  const [a, b] = parts('1-3')\n  expect(`${a}-${b}`).toBe('1-3')\n})"
+      ]
+    },
+    "note": "the subject is a template literal built from values the code under test returned; it only looks empty once strings are blanked"
   }
 ]
