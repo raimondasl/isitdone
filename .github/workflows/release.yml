@@ -75,10 +75,11 @@ jobs:
           node scripts/sync-server-json.mjs
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz -C "${RUNNER_TEMP}" mcp-publisher
           "${RUNNER_TEMP}/mcp-publisher" login github-oidc
-          for attempt in 1 2 3; do
+          # The registry verifies the npm package; a version published seconds ago can 404 for several minutes (0.5.0 did).
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if "${RUNNER_TEMP}/mcp-publisher" publish; then exit 0; fi
-            echo "mcp-publisher publish failed (attempt ${attempt} of 3); npm may still be propagating, waiting 30s"
-            sleep 30
+            echo "mcp-publisher publish failed (attempt ${attempt} of 12); npm may still be propagating, waiting 45s"
+            sleep 45
           done
           exit 1
       - name: warn if the MCP Registry was not updated
