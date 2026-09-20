@@ -4,6 +4,13 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-20
+
+### Changed
+
+- Claude Code plugin: the hook commands in `hooks/hooks.json` are pinned to the plugin's own npm version (`npx -y @aivolution/isitdone@0.5.2 hook ...`), so a plugin at version X always runs package X (no supply-chain drift, no stale npx cache), and the skill now also ships under `skills/isitdone/SKILL.md`, where plugin discovery looks (the root `SKILL.md` stays for `npx skills add`). Both raised by the buildwithclaude maintainer's review.
+- `scripts/sync-server-json.mjs` now syncs every follower of the package version (server.json, the alias package, the plugin manifests, the pinned hook commands) and the skill copy; its `--check` mode runs in the test suite.
+
 ## [0.5.1] - 2026-09-19
 
 ### Fixed
