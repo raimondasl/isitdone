@@ -4,6 +4,12 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-19
+
+### Fixed
+
+- Python detection no longer guesses `mypy .` (or `ruff check .`, bare `pytest`) when the repository says otherwise. The order is now: the command a GitHub workflow runs (`mypy src/pkg`, `ruff check src tests`, pytest paths and `-m`/`-k` selection; a line with shell syntax or `${{ }}` is never copied), then the mypy configuration's own `files`/`packages`/`modules` (bare `mypy`), then `mypy src` for a src layout, and `mypy .` only as the last resort. `isitdone detect` shows the workflow file as the source. A wrong guess made every stop report NOT DONE until a `.isitdone.json` was written.
+
 ## [0.5.0] - 2026-09-19
 
 ### Added

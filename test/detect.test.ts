@@ -88,6 +88,48 @@ describe('detectChecks: python', () => {
     expect(ids(repo.root)).toEqual(['lint:uv run ruff check .', 'typecheck:uv run mypy .', 'test:uv run pytest -q']);
   });
 
+  it('mirrors what CI runs for mypy, ruff and pytest instead of guessing "."', () => {
+    repo = tempRepo({
+      git: false,
+      files: {
+        'pyproject.toml': '[project]\nname = "reporadar"\n[tool.pytest.ini_options]\ntestpaths = ["tests"]\n[tool.ruff]\nline-length = 100\n[tool.mypy]\nstrict = true\n',
+        'uv.lock': '',
+        'src/reporadar/__init__.py': '',
+        'tests/unit/test_x.py': '',
+        '.github/workflows/ci.yml': [
+          'name: ci',
+          'on: [push]',
+          'jobs:',
+          '  test:',
+          '    runs-on: ubuntu-latest',
+          '    steps:',
+          '      - uses: actions/checkout@v4',
+          '      - run: uv sync --all-extras',
+          '      - name: lint',
+          '        run: uv run ruff check src tests',
+          '      - name: types',
+          '        run: |',
+          '          echo checking',
+          '          uv run mypy src/reporadar',
+          '      - run: uv run pytest -q tests/unit -m "not integration" --cov=reporadar --cov-report xml -n auto',
+        ].join('\n'),
+      },
+    });
+    expect(ids(repo.root)).toEqual(['lint:uv run ruff check src tests', 'typecheck:uv run mypy src/reporadar', 'test:uv run pytest -q tests/unit -m "not integration"']);
+    expect(detectChecks(repo.root).checks.find((c) => c.id === 'typecheck')?.source).toBe('.github/workflows/ci.yml');
+  });
+
+  it('without CI: bare mypy when its config names the targets, mypy src for a src layout, mypy . last; shell syntax in CI is never copied', () => {
+    repo = tempRepo({ git: false, files: { 'pyproject.toml': '[tool.mypy]\nstrict = true\nfiles = ["src/pkg"]\n' } });
+    expect(ids(repo.root)).toEqual(['typecheck:mypy']);
+    repo.cleanup();
+    repo = tempRepo({ git: false, files: { 'pyproject.toml': '[tool.mypy]\nstrict = true\n[tool.other]\nfiles = ["x"]\n', 'src/pkg/__init__.py': '' } });
+    expect(ids(repo.root)).toEqual(['typecheck:mypy src']);
+    repo.cleanup();
+    repo = tempRepo({ git: false, files: { 'requirements.txt': 'mypy\n', 'mypy.ini': '[mypy]\nstrict = True\n', '.github/workflows/ci.yml': 'jobs:\n  t:\n    steps:\n      - run: mypy $(git ls-files "*.py") && echo ok\n      - run: mypy ${{ matrix.target }}\n' } });
+    expect(ids(repo.root)).toEqual(['typecheck:mypy .']);
+  });
+
   it('detects pytest from a tests directory and dev dependencies', () => {
     repo = tempRepo({ git: false, files: { 'requirements.txt': 'flask\npytest>=8\nruff\n', 'tests/test_x.py': '' } });
     expect(ids(repo.root)).toEqual(['lint:ruff check .', 'test:pytest -q']);

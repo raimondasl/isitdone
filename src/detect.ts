@@ -204,6 +204,71 @@ function venvEnv(root: string): { env: NodeJS.ProcessEnv; note: string | null } 
   return { env: {}, note: null };
 }
 
+/** `run:` command lines of the GitHub workflows, one entry per shell line (multi-line `run: |` blocks are split). */
+function ciCommandLines(root: string): Array<{ line: string; file: string }> {
+  const dir = join(root, '.github', 'workflows');
+  const out: Array<{ line: string; file: string }> = [];
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir).filter((n) => /\.ya?ml$/i.test(n)).sort();
+  } catch {
+    return out;
+  }
+  for (const name of names.slice(0, 20)) {
+    const text = readText(join(dir, name));
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^(\s*)(?:-\s+)?run:\s*(.*)$/.exec(lines[i] as string);
+      if (!m) continue;
+      const rest = (m[2] as string).trim();
+      if (rest !== '' && !/^[|>][+-]?$/.test(rest)) {
+        out.push({ line: rest.replace(/^["']|["']$/g, ''), file: name });
+        continue;
+      }
+      // Block scalar: every following line indented deeper than the `run:` key.
+      const indent = (m[1] as string).length + ((lines[i] as string).trimStart().startsWith('- ') ? 2 : 0);
+      for (let j = i + 1; j < lines.length; j++) {
+        const l = lines[j] as string;
+        if (l.trim() === '') continue;
+        if ((/^\s*/.exec(l) as RegExpExecArray)[0].length <= indent) break;
+        out.push({ line: l.trim(), file: name });
+      }
+    }
+  }
+  return out;
+}
+
+/** Arguments safe to copy out of a CI file into a command we run: paths, flags and simple quoted words; no shell syntax, no ${{ }}. */
+const SAFE_ARG = /^(?:[\w./=:,@+\-\[\]*]+|"[\w ./=:,@+\-]*"|'[\w ./=:,@+\-]*')$/;
+
+/**
+ * The arguments CI passes to `tool` (e.g. "mypy src/pkg"), or null. The runner prefix (uv run, poetry run, python -m ...)
+ * is dropped because the caller adds its own. A line with shell syntax or expressions is ignored rather than guessed at.
+ */
+function ciArgsFor(lines: Array<{ line: string; file: string }>, tool: string, sub?: string): { args: string[]; file: string } | null {
+  const re = new RegExp(`^(?:(?:uv|poetry|pipenv|pdm|hatch|rye)\\s+run\\s+(?:--?[\\w-]+(?:[= ][\\w.-]+)?\\s+)*)?(?:python3?\\s+-m\\s+)?${tool}${sub ? `\\s+${sub}` : ''}(?=\\s|$)(.*)$`);
+  for (const { line, file } of lines) {
+    const m = re.exec(line);
+    if (!m) continue;
+    const args = (m[1] as string).trim() === '' ? [] : ((m[1] as string).trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? []);
+    if (args.every((a) => SAFE_ARG.test(a))) return { args, file };
+  }
+  return null;
+}
+
+/** Does the mypy configuration name what to check (files / packages / modules)? Then bare `mypy` is the project's own command. */
+function mypyConfigHasTargets(root: string, pyproject: string, setupCfg: string): boolean {
+  const key = /^\s*(?:files|packages|modules)\s*=/m;
+  const section = (text: string, header: RegExp): string => {
+    const m = header.exec(text);
+    if (!m) return '';
+    const rest = text.slice(m.index + m[0].length);
+    const next = /^\[/m.exec(rest);
+    return next ? rest.slice(0, next.index) : rest;
+  };
+  return key.test(section(pyproject, /^\[tool\.mypy\]\s*$/m)) || key.test(section(readText(join(root, 'mypy.ini')), /^\[mypy\]\s*$/m)) || key.test(section(readText(join(root, '.mypy.ini')), /^\[mypy\]\s*$/m)) || key.test(section(setupCfg, /^\[mypy\]\s*$/m));
+}
+
 function detectPython(root: string, out: Detection): void {
   const pyproject = readText(join(root, 'pyproject.toml'));
   const hasPy = pyproject !== '' || has(root, 'setup.py', 'setup.cfg', 'requirements.txt', 'pytest.ini', 'tox.ini', 'Pipfile');
@@ -229,20 +294,50 @@ function detectPython(root: string, out: Detection): void {
     /^\[pytest\]/m.test(readText(join(root, 'tox.ini'))) ||
     hasPyDep(pyproject, requirements, 'pytest');
   const testsDir = ['tests', 'test'].find((d) => isDir(join(root, d)));
+  const ci = ciCommandLines(root);
   if (pytestConfigured || testsDir) {
-    push('test', 'pytest -q', pytestConfigured ? 'pytest config' : `${testsDir}/ directory`);
+    // CI often runs a subset (unit tests only, or `-m "not integration"`): mirror its paths and -m/-k selection, nothing else
+    // (coverage and xdist flags need plugins and do not change what passes).
+    const fromCi = ciArgsFor(ci, 'pytest');
+    const keep: string[] = [];
+    if (fromCi) {
+      for (let i = 0; i < fromCi.args.length; i++) {
+        const a = fromCi.args[i] as string;
+        if ((a === '-m' || a === '-k') && i + 1 < fromCi.args.length) keep.push(a, fromCi.args[++i] as string);
+        // A positional is kept only when it is a path that exists here, so the value of a dropped flag (`--cov-report xml`,
+        // `-n auto`) can never be mistaken for a test path.
+        else if (!a.startsWith('-') && existsSync(join(root, (a.split('::')[0] as string).replace(/^["']|["']$/g, '')))) keep.push(a);
+      }
+    }
+    if (keep.length > 0) push('test', `pytest -q ${keep.join(' ')}`, `.github/workflows/${(fromCi as { file: string }).file}`);
+    else push('test', 'pytest -q', pytestConfigured ? 'pytest config' : `${testsDir}/ directory`);
   }
 
+  // For the linters and type checkers the path argument decides pass or fail, so the order is: what CI runs, then what
+  // the tool's own config names, then the src/ layout, and a bare "." only when the repository says nothing.
+  const mirrored = (tool: string, sub?: string): { cmd: string; source: string } | null => {
+    const c = ciArgsFor(ci, tool, sub);
+    return c ? { cmd: [tool, sub, ...c.args].filter(Boolean).join(' '), source: `.github/workflows/${c.file}` } : null;
+  };
+  const srcLayout = isDir(join(root, 'src'));
+
   if (has(root, 'ruff.toml', '.ruff.toml') || hasPyTool(pyproject, 'ruff') || hasPyDep(pyproject, requirements, 'ruff')) {
-    push('lint', 'ruff check .', 'ruff config');
+    const m = mirrored('ruff', 'check');
+    push('lint', m ? m.cmd : 'ruff check .', m ? m.source : 'ruff config');
   } else if (has(root, '.flake8') || /^\[flake8\]/m.test(setupCfg) || hasPyDep(pyproject, requirements, 'flake8')) {
-    push('lint', 'flake8', 'flake8 config');
+    const m = mirrored('flake8');
+    push('lint', m ? m.cmd : 'flake8', m ? m.source : 'flake8 config');
   }
 
   if (has(root, 'mypy.ini', '.mypy.ini') || hasPyTool(pyproject, 'mypy') || /^\[mypy\]/m.test(setupCfg) || hasPyDep(pyproject, requirements, 'mypy')) {
-    push('typecheck', 'mypy .', 'mypy config');
+    const m = mirrored('mypy');
+    if (m) push('typecheck', m.cmd, m.source);
+    else if (mypyConfigHasTargets(root, pyproject, setupCfg)) push('typecheck', 'mypy', 'mypy config (files/packages)');
+    else if (srcLayout) push('typecheck', 'mypy src', 'mypy config, src/ layout');
+    else push('typecheck', 'mypy .', 'mypy config');
   } else if (has(root, 'pyrightconfig.json') || hasPyTool(pyproject, 'pyright') || hasPyDep(pyproject, requirements, 'pyright')) {
-    push('typecheck', 'pyright', 'pyright config');
+    const m = mirrored('pyright');
+    push('typecheck', m ? m.cmd : 'pyright', m ? m.source : 'pyright config');
   }
 }
 
