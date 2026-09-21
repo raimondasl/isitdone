@@ -22,6 +22,7 @@ import { findRoot, gitInfo } from './git.js';
 import { formatDuration, plain } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
 import { formatDetection, formatReceiptState, formatReport, integrityBlocks, receiptStateOf, toJson } from './report.js';
+import { LOCK_WAIT_MS } from './sessions.js';
 import { timeoutFor, verify, type VerifyResult } from './verify.js';
 import { VERSION } from './version.js';
 
@@ -637,6 +638,8 @@ export class McpServer {
         host: ctx.clientName ? `mcp:${ctx.clientName.replace(/[^\x20-\x7e]/g, '').slice(0, 60)}` : 'mcp',
         base,
         signal,
+        lockWaitMs: config.otherSessions === 'ignore' ? 0 : LOCK_WAIT_MS,
+        onLockWait: () => tell('waiting for another check run in this directory'),
         onCheckStart: (check) => {
           const started = Date.now();
           tell(`running ${check.cmd}`);

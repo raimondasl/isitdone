@@ -6,7 +6,7 @@ import { detectChecks } from './detect.js';
 import { doctor } from './doctor.js';
 import { dirtyPathSet, findRoot, gitInfo } from './git.js';
 import { readStdin, runEditHook, runHook } from './hook.js';
-import { liveSessionsNote } from './sessions.js';
+import { liveSessionsNote, LOCK_WAIT_MS } from './sessions.js';
 import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
@@ -175,6 +175,9 @@ async function cmdRun(args: Args): Promise<number> {
     useCache: args.flags.cache !== false,
     base: typeof args.flags.base === 'string' ? args.flags.base : undefined,
     ci,
+    // The agent a Stop hook just sent here must not run the suite on top of the other session's hook run.
+    lockWaitMs: config.otherSessions === 'ignore' ? 0 : LOCK_WAIT_MS,
+    onLockWait: () => err('isitdone: another check run is in progress in this directory; waiting for it (up to 3 minutes) ...'),
     onCheckStart: live ? (c) => process.stdout.write(s.dim(`  running ${c.cmd} ...`)) : undefined,
     onCheckDone: live ? () => process.stdout.write(`\r${' '.repeat(70)}\r`) : undefined,
   });

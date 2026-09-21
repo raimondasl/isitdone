@@ -11,7 +11,7 @@ import { getHost, type HookInput, type HostAdapter, type HostName } from './host
 import { DEFAULT_HOOK_TIMEOUT_S, HOOK_MARGIN_S } from './init.js';
 import { ensureStateDir } from './receipt.js';
 import { formatBlockReason, integrityBlocks, type OtherSessionNote } from './report.js';
-import { acquireRunLock, attribute, compactEdits, formatAgo, LOCK_WAIT_MS, mentionContext, mentions, recordEdits, sessionKey, SESSIONS_DIR, type Attribution, type RunLock } from './sessions.js';
+import { attribute, compactEdits, formatAgo, LOCK_WAIT_MS, mentionContext, mentions, pruneSessions, recordEdits, sessionKey, SESSIONS_DIR, type Attribution } from './sessions.js';
 import { budgetSeconds, verify, type ResolvedProfile, type VerifyResult } from './verify.js';
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -38,6 +38,8 @@ export interface SessionState {
   softBlocks?: number;
   /** When this session was first seen here. Another session counts as concurrent only if it was active after this. */
   firstSeen?: string;
+  /** When a stop of this session last passed its checks: what it edited before then is finished work, not work in progress. */
+  lastPassAt?: string;
   updatedAt: string;
 }
 
@@ -144,6 +146,8 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 20) + '\n... (truncated)';
 }
 
+/** On hosts that do not flag a continuation, how long a "told about the other session" block stays good for a release. */
+const TOLD_MAX_AGE_MS = 10 * 60 * 1000;
 /** Check output kept per check for working out whose files a failure names. */
 const MAX_ATTRIBUTION_CHARS = 1024 * 1024;
 
@@ -184,7 +188,8 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   if (input.permissionMode === 'plan') return allow('plan mode: the agent cannot edit files, so there is nothing to verify yet');
 
   const cwd = input.cwd && existsSync(input.cwd) ? input.cwd : (opts.cwd ?? process.cwd());
-  const root = findRoot(cwd);
+  const topLevel = gitTopLevel(cwd);
+  const root = findRoot(cwd, topLevel);
 
   let config: IsitdoneConfig;
   try {
@@ -220,7 +225,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   }
 
   // Another session working in this same tree? Only with proof (see sessions.ts): a session on its own is gated as ever.
-  const top = doctor || config.otherSessions === 'ignore' || input.sessionId === null ? null : gitTopLevel(root);
+  const top = doctor || config.otherSessions === 'ignore' || input.sessionId === null ? null : topLevel;
   const whoseFiles = (): Attribution | null => {
     if (top === null) return null;
     try {
@@ -231,40 +236,32 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   };
   const before = whoseFiles();
 
-  // Two check runs in one directory fight over caches, build output and ports, so runs are serialised per project.
-  // The lock is taken after the cache check (a cached PASS never waits) and the wait fits inside the hook timeout
-  // that init registered, which is sized from the same budget.
-  let lock: RunLock | null = null;
+  // Two check runs in one directory fight over caches, build output and ports, so runs are serialised per project
+  // (verify takes the lock after its cache check). The wait fits inside the hook timeout that init registered, which
+  // is sized from the same budget.
   const output = new Map<string, string>();
-  let result: VerifyResult;
-  try {
-    result = await verify({
-      root,
-      config,
-      profile,
-      claim,
-      host: RECEIPT_HOST[host.name] ?? host.name,
-      useCache: !doctor,
-      dryRun: doctor,
-      // A lite failure in the other session's file must not hide this session's own failing tests.
-      all: before !== null,
-      beforeRun:
-        doctor || config.otherSessions === 'ignore'
-          ? undefined
-          : async (wanted) => {
-              const budget = budgetSeconds(wanted, config);
-              const slack = Math.max(DEFAULT_HOOK_TIMEOUT_S, budget + HOOK_MARGIN_S) - budget - HOOK_MARGIN_S / 2;
-              lock = await acquireRunLock(root, Math.min(LOCK_WAIT_MS, Math.max(10, slack) * 1000));
-              return lock.waitedMs > 1000;
-            },
-      onOutput: doctor ? undefined : (check, chunk) => output.set(check.id, ((output.get(check.id) ?? '') + chunk).slice(-MAX_ATTRIBUTION_CHARS)),
-    });
-  } finally {
-    (lock as RunLock | null)?.release();
-  }
-  const waited = (lock as RunLock | null)?.waitedMs ?? 0;
+  const result = await verify({
+    root,
+    config,
+    profile,
+    claim,
+    host: RECEIPT_HOST[host.name] ?? host.name,
+    useCache: !doctor,
+    dryRun: doctor,
+    // A lite failure in the other session's file must not hide this session's own failing tests.
+    all: before !== null,
+    lockWaitMs:
+      doctor || config.otherSessions === 'ignore'
+        ? 0
+        : (wanted) => {
+            const budget = budgetSeconds(wanted, config);
+            const slack = Math.max(DEFAULT_HOOK_TIMEOUT_S, budget + HOOK_MARGIN_S) - budget - HOOK_MARGIN_S / 2;
+            return Math.min(LOCK_WAIT_MS, Math.max(10, slack) * 1000);
+          },
+    onOutput: doctor ? undefined : (check, chunk) => output.set(check.id, ((output.get(check.id) ?? '') + chunk).slice(-MAX_ATTRIBUTION_CHARS)),
+  });
   const firstSeen = prev?.firstSeen ?? new Date().toISOString();
-  const state = (n: number, softBlocks = 0): SessionState => ({
+  const state = (n: number, softBlocks = 0, passed = false): SessionState => ({
     host: host.name,
     sessionId: input.sessionId,
     turnId: input.turnId,
@@ -273,18 +270,26 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     lastTree: result.git.tree,
     softBlocks,
     firstSeen,
+    lastPassAt: passed ? new Date().toISOString() : prev?.lastPassAt,
     updatedAt: new Date().toISOString(),
   });
-  if (top !== null) compactEdits(top, host.name, input.sessionId);
+  if (top !== null) {
+    compactEdits(top, host.name, input.sessionId);
+    if (top !== root) pruneSessions(top); // the edit records live there; writeState prunes the project root's
+  }
 
   // The run took time and the other session kept working: look again before deciding.
   const failing = !result.ok || (result.integrity?.findings.some((x) => !x.suppressed) ?? false);
   const others = failing ? otherSessions(whoseFiles(), top, result, output) : null;
-  const view = others ? setAsideForeignFindings(result, new Set(others.attribution.foreign.map((x) => x.path))) : result;
+  const view = others && others.attribution.mine.size > 0 ? setAsideForeignFindings(result, new Set(others.attribution.foreign.map((x) => x.path))) : result;
   const setAside = others && view.integrity && result.integrity ? result.integrity.findings.filter((x) => !x.suppressed).length - view.integrity.findings.filter((x) => !x.suppressed).length : 0;
 
   const notes = [...view.warnings];
-  if (waited > 5000) notes.push(`waited ${Math.round(waited / 1000)} s for another check run in this directory${(lock as RunLock | null)?.held ? '' : ' and then ran alongside it'}`);
+  const lock = result.lock;
+  if (lock && lock.waitedMs > 5000) {
+    const what = lock.tookOver ? 'for a check run in this directory that never finished (its lock was cleared)' : 'for another check run in this directory';
+    notes.push(`waited ${Math.round(lock.waitedMs / 1000)} s ${what}${lock.held ? '' : ' and then ran alongside it'}`);
+  }
   if (setAside > 0) notes.push(`${setAside} test-integrity finding${setAside === 1 ? ' is' : 's are'} in files another session edited and ${setAside === 1 ? 'was' : 'were'} left to that session`);
   const it = view.integrity;
   const weakened = it ? it.findings.filter((f) => !f.suppressed) : [];
@@ -294,7 +299,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   const warn = notes.length ? `isitdone: ${notes.join('; ')}` : undefined;
 
   if (view.ok && !integrityBlocks(view)) {
-    if (!doctor) writeState(root, state(0));
+    if (!doctor) writeState(root, state(0, 0, true));
     return allow(`${view.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, view, 0);
   }
 
@@ -303,7 +308,10 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   // its own test changes block in strict mode, or when it has no edit records at all (a host without a post-edit
   // hook, or edits made through the shell): without evidence of what it touched, it is gated as if it were alone.
   const tied = others === null || others.mineNamed || integrityBlocks(view) || others.attribution.mine.size === 0;
-  const softBlocks = continuation ? (prev?.softBlocks ?? 0) : 0;
+  // Hosts that flag a continuation vouch for it. Where it is inferred (no flag, or Cursor's loop count), an interrupted
+  // turn looks the same as a continued one, so a telling older than a few minutes no longer counts.
+  const toldRecently = prev !== null && (input.stopHookActive === true || Date.now() - Date.parse(prev.updatedAt) < TOLD_MAX_AGE_MS);
+  const softBlocks = continuation && toldRecently ? (prev?.softBlocks ?? 0) : 0;
   if (!tied && others && softBlocks >= 1) {
     // Told once, checks run again, still nothing of its own in the output: let it go, and say what is still red.
     if (!doctor) writeState(root, state(input.stopHookActive === null ? 0 : attempts));
@@ -365,7 +373,7 @@ function setAsideForeignFindings(result: VerifyResult, foreign: Set<string>): Ve
 function sessionNote(a: Attribution, soft: boolean): OtherSessionNote {
   const now = Date.now();
   const list = (xs: Attribution['foreign']) => xs.map((x) => ({ path: x.path, ago: formatAgo(now - x.editedAt) }));
-  return { foreign: list(a.foreign), shared: list(a.shared), lastActive: formatAgo(now - a.otherLastActive), soft };
+  return { foreign: list(a.foreign), shared: list(a.shared), lastActive: formatAgo(now - a.otherLastActive), soft, ownUnknown: a.mine.size === 0 };
 }
 
 export interface EditHookOutcome {
@@ -408,7 +416,7 @@ export function runEditHook(opts: { host: string; stdin: string; cwd?: string; e
   const notes: string[] = [];
   for (const file of input.files.slice(0, 8)) {
     try {
-      const r = checkEditedFile(cwd, file, 'HEAD', diffOnce);
+      const r = checkEditedFile(cwd, file, 'HEAD', diffOnce, top);
       if (r?.note) notes.push(r.note);
     } catch {
       // a scan problem must never disturb the agent's tool call

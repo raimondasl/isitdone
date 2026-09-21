@@ -5,23 +5,30 @@
  * failure names. It also serialises check runs, so two sessions stopping together do not run the suite on top of each
  * other.
  *
- * Two rules bound everything here. A session on its own must be gated exactly as if this module did not exist: a
- * conversation that ended (/clear, a restart) is not "another session", so concurrency needs proof, namely hook
- * activity of the other session AFTER this session's first. And nothing here may brick the agent: a missing or
- * unreadable record means "no evidence".
+ * Two rules bound everything here. A session on its own must be gated as if this module did not exist, so "another
+ * session's work in progress" needs proof: hook activity of the other session AFTER this session's first (a
+ * conversation that ended before this one began, /clear or a restart, is not another session), and edits it made
+ * AFTER its own last passing stop (what it finished and verified is no longer in progress: if it fails now, someone
+ * else's later change broke it). And nothing here may brick the agent: a missing or unreadable record means "no
+ * evidence".
  */
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
+import { stripAnsi } from './output.js';
 import { RECEIPT_DIR } from './git.js';
 import { ensureStateDir } from './receipt.js';
 
 export const SESSIONS_DIR = 'sessions';
 const EDITS_EXT = '.edits';
-/** How long after its last hook activity another session's uncommitted files still count as its work in progress. */
-export const ACTIVE_WINDOW_MS = 2 * 60 * 60 * 1000;
-/** Other sessions' edit records older than this are ignored (their files are pruned at the same age). */
+/**
+ * How long after its last hook activity another session's unfinished edits still count as work in progress. A session
+ * killed mid-turn never says goodbye, so this is how long its leftovers soften the gate for the session that remains.
+ */
+export const ACTIVE_WINDOW_MS = 60 * 60 * 1000;
+/** Other sessions' edit records older than this are ignored; session files untouched for this long are pruned. */
 const RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_PATHS_PER_EVENT = 50;
 const COMPACT_ABOVE_BYTES = 64 * 1024;
@@ -58,6 +65,8 @@ export interface SessionEdits {
   /** Earliest and latest sign of life: edit records and the state file's firstSeen / updatedAt. */
   firstSeen: number;
   lastActive: number;
+  /** When a stop of this session last passed its checks (0: never). Edits up to then are finished, verified work. */
+  lastPassAt: number;
   /** Repo-relative path -> time of the latest edit by this session. */
   files: Map<string, number>;
 }
@@ -68,7 +77,7 @@ export function readSessions(bases: string[]): SessionEdits[] {
   const get = (key: string): SessionEdits => {
     let s = out.get(key);
     if (!s) {
-      s = { key, firstSeen: Infinity, lastActive: 0, files: new Map() };
+      s = { key, firstSeen: Infinity, lastActive: 0, lastPassAt: 0, files: new Map() };
       out.set(key, s);
     }
     return s;
@@ -106,16 +115,44 @@ export function readSessions(bases: string[]): SessionEdits[] {
           }
         }
       } else if (e.endsWith('.json')) {
-        const st = tryReadJsonFile<{ updatedAt?: string; firstSeen?: string }>(join(dir, e));
+        const st = tryReadJsonFile<{ updatedAt?: string; firstSeen?: string; lastPassAt?: string }>(join(dir, e));
         const s = get(e.slice(0, -'.json'.length));
         for (const iso of [st?.firstSeen, st?.updatedAt]) {
           const t = iso ? Date.parse(iso) : NaN;
           if (!Number.isNaN(t)) seen(s, t);
         }
+        const passed = st?.lastPassAt ? Date.parse(st.lastPassAt) : NaN;
+        if (!Number.isNaN(passed) && passed > s.lastPassAt) s.lastPassAt = passed;
       }
     }
   }
   return [...out.values()];
+}
+
+/** Remove session files nobody has written for a day. The project root and the git top-level each have such a directory. */
+export function pruneSessions(base: string, now = Date.now()): void {
+  const dir = sessionsDir(base);
+  try {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e);
+      try {
+        if (now - statSync(p).mtimeMs > RECORD_MAX_AGE_MS) rmSync(p, { force: true });
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** Did any session record an edit at or after `since`? (A check run that overlapped someone's edits proves less than it seems.) */
+export function editsSince(bases: string[], since: number): boolean {
+  try {
+    return readSessions(bases).some((s) => [...s.files.values()].some((t) => t >= since));
+  } catch {
+    return false;
+  }
 }
 
 /** Keep one record per path once a long session's file has grown; a record lost to a concurrent append is harmless. */
@@ -153,10 +190,12 @@ export interface Attribution {
 }
 
 /**
- * Is another session working in this tree, and which uncommitted files are its? Null unless there is proof:
+ * Is another session working in this tree, and which uncommitted files are its work in progress? Null unless:
  *  - the other session's hooks fired AFTER this session's first recorded activity (so it is not a predecessor that
  *    ended before this one began: /clear, a restart, yesterday's conversation), and within ACTIVE_WINDOW_MS;
- *  - it recorded edits to files that are still uncommitted.
+ *  - it recorded edits, to files that are still uncommitted, AFTER its own last passing stop. A session that stopped
+ *    with passing checks and has not edited since (a finished turn, a one-shot helper that exited) has nothing in
+ *    progress: its files were good when it left them, so a failure in them now is a later change's doing.
  * A dirty file nobody recorded (the user's own edit, a formatter, a shell command) is nobody's. `dirty` is only asked
  * for once a concurrent session is found, so the usual single-session stop costs one directory listing.
  */
@@ -166,7 +205,8 @@ export function attribute(bases: string[], host: string, sessionId: string | nul
   const meKey = sessionKey(host, sessionId);
   const me = sessions.find((s) => s.key === meKey);
   const myStart = me && Number.isFinite(me.firstSeen) ? me.firstSeen : now;
-  const concurrent = sessions.filter((s) => s.key !== meKey && s.files.size > 0 && s.lastActive > myStart && now - s.lastActive <= ACTIVE_WINDOW_MS);
+  const unfinished = (s: SessionEdits) => [...s.files.values()].some((t) => t > s.lastPassAt);
+  const concurrent = sessions.filter((s) => s.key !== meKey && s.lastActive > myStart && now - s.lastActive <= ACTIVE_WINDOW_MS && unfinished(s));
   if (concurrent.length === 0) return null;
   const dirtyNow = dirty();
   const mine = new Set(me ? me.files.keys() : []);
@@ -175,7 +215,7 @@ export function attribute(bases: string[], host: string, sessionId: string | nul
   for (const s of concurrent) {
     let counted = false;
     for (const [p, t] of s.files) {
-      if (!dirtyNow.has(p) || now - t > RECORD_MAX_AGE_MS) continue;
+      if (t <= s.lastPassAt || !dirtyNow.has(p) || now - t > RECORD_MAX_AGE_MS) continue;
       counted = true;
       if ((others.get(p) ?? 0) < t) others.set(p, t);
     }
@@ -194,12 +234,12 @@ export function attribute(bases: string[], host: string, sessionId: string | nul
  * uncommitted edits here, say who edited what, so an agent reading a NOT DONE report fixes only its own files.
  */
 export function liveSessionsNote(bases: string[], dirty: () => Set<string>, now = Date.now()): string | null {
-  const recent = readSessions(bases).filter((s) => s.files.size > 0 && now - s.lastActive <= ACTIVE_WINDOW_MS);
+  const recent = readSessions(bases).filter((s) => now - s.lastActive <= ACTIVE_WINDOW_MS && [...s.files.values()].some((t) => t > s.lastPassAt));
   const overlapping = recent.filter((s) => recent.some((t) => t !== s && s.firstSeen < t.lastActive && t.firstSeen < s.lastActive));
   if (overlapping.length < 2) return null;
   const dirtyNow = dirty();
   const live = overlapping
-    .map((s) => ({ ...s, dirty: [...s.files.keys()].filter((p) => dirtyNow.has(p)).sort() }))
+    .map((s) => ({ ...s, dirty: [...s.files].filter(([p, t]) => t > s.lastPassAt && dirtyNow.has(p)).map(([p]) => p).sort() }))
     .filter((s) => s.dirty.length > 0)
     .sort((a, b) => b.lastActive - a.lastActive);
   if (live.length < 2) return null;
@@ -213,8 +253,13 @@ export function liveSessionsNote(bases: string[], dirty: () => Set<string>, now 
 
 /** Base names too common to identify a file when a tool prints only `name:line`. */
 const GENERIC_BASENAME = /^(?:index|main|mod|lib|utils?|helpers?|types?|common|base|core|config|constants|setup|conftest|__init__|test|tests|app)\.[A-Za-z0-9]+$/i;
-/** Characters that can belong to a path token in tool output (spaces end a token: a path with spaces is seen from its last space on). */
+/** Characters that can belong to a path token in tool output (a space ends a token; a path with spaces is found whole, see mentions). */
 const PATH_CHAR = /[^\s"'`<>|*?,;=]/;
+/** Stands for "<absolute top-level>/" in the normalised text, so an absolute path is anchored and a top-level with spaces costs nothing. */
+const ANCHOR = String.fromCharCode(1);
+/** No path token is longer than this; bounds the walk back from a base-name hit on one enormous line. */
+const MAX_TOKEN = 4096;
+const MAX_HITS = 2000;
 
 export interface MentionContext {
   /** Check output: ANSI stripped, backslashes turned into slashes, lower-cased when `fold`. */
@@ -230,16 +275,17 @@ export interface MentionContext {
 export function mentionContext(output: string, top: string, repoPaths: Iterable<string>, fold = process.platform === 'win32' || process.platform === 'darwin'): MentionContext {
   const norm = (s: string) => (fold ? s.toLowerCase() : s);
   const byBase = new Map<string, string[]>();
-  for (const p of repoPaths) {
+  // Callers pass tracked plus uncommitted paths: a modified file is in both, and must count once.
+  for (const p of new Set(repoPaths)) {
     const q = norm(p);
     const name = q.slice(q.lastIndexOf('/') + 1);
     const list = byBase.get(name);
     if (list) list.push(q);
     else byBase.set(name, [q]);
   }
-  // eslint-disable-next-line no-control-regex
-  const text = norm(output.replace(/\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\\/g, '/'));
-  return { text, top: norm(top.replace(/\\/g, '/').replace(/\/$/, '')), byBase, fold };
+  const topNorm = norm(top.replace(/\\/g, '/').replace(/\/$/, ''));
+  const text = norm(stripAnsi(output).replace(/\\/g, '/')).split(`${topNorm}/`).join(ANCHOR);
+  return { text, top: topNorm, byBase, fold };
 }
 
 /**
@@ -257,9 +303,10 @@ export function mentions(ctx: MentionContext, file: string): boolean {
   const sameBase = ctx.byBase.get(name) ?? [path];
   const resolves = (token: string, end: number): boolean => {
     let t = token;
-    const k = t.indexOf(`${ctx.top}/`);
-    if (k >= 0) t = t.slice(k + ctx.top.length + 1);
-    else {
+    // Anchored at the top-level: the rest is the whole repo-relative path, or it is another file.
+    const k = t.lastIndexOf(ANCHOR);
+    if (k >= 0) return t.slice(k + 1) === path;
+    {
       t = t.replace(/^[a-z][a-z0-9+.-]*:\/\/+(?![a-z]:\/)/i, '').replace(/^[a-z][a-z0-9+.-]*:\/\/+/i, '');
       while (t.startsWith('./')) t = t.slice(2);
       if (t.startsWith('/') || /^[a-z]:\//i.test(t)) return false; // an absolute path somewhere else
@@ -273,13 +320,19 @@ export function mentions(ctx: MentionContext, file: string): boolean {
     if (t === path) return true;
     return !GENERIC_BASENAME.test(name) && /^[:(]\d/.test(text.slice(end, end + 2));
   };
+  let looked = 0;
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    // A name that occurs thousands of times without once resolving is log noise, not a finding; stay linear.
+    if (++looked > MAX_HITS) return false;
     const end = i + name.length;
     const next = text[end];
     if (next !== undefined && /[A-Za-z0-9_-]/.test(next)) continue;
     if (next === '.' && /[A-Za-z0-9]/.test(text[end + 1] ?? '')) continue; // a.ts.map, a.test.ts.snap
+    // The whole repo-relative path, spaces and brackets included, with nothing path-like glued to its left.
+    const whole = end - path.length;
+    if (whole >= 0 && text.startsWith(path, whole) && (whole === 0 || text[whole - 1] === ANCHOR || !/[A-Za-z0-9_.\/-]/.test(text[whole - 1] as string))) return true;
     let start = i;
-    while (start > 0 && PATH_CHAR.test(text[start - 1] as string)) start--;
+    while (start > 0 && i - start < MAX_TOKEN && PATH_CHAR.test(text[start - 1] as string)) start--;
     const token = text.slice(start, end);
     if (token.length > name.length && /[A-Za-z0-9_.-]/.test(token[token.length - name.length - 1] as string)) continue; // "myfoo.ts"
     if (resolves(token, end)) return true;
@@ -305,12 +358,26 @@ export const LOCK_WAIT_MS = 180_000;
 /** The holder refreshes the lock's mtime this often; a lock not refreshed for LOCK_STALE_MS belongs to a dead process. */
 const LOCK_BEAT_MS = 5_000;
 const LOCK_STALE_MS = 30_000;
+/** A holder whose pid is gone here and that missed two beats is dead; one that still beats is alive somewhere else (a container, WSL). */
+const LOCK_DEAD_PID_MS = 2 * LOCK_BEAT_MS + 1_000;
 const LOCK_POLL_MS = 400;
+
+function pidGone(pid: unknown): boolean {
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
 
 export interface RunLock {
   /** False when the wait ran out (or the lock could not be written) and the run goes ahead unserialised. */
   held: boolean;
   waitedMs: number;
+  /** The wait ended by clearing a lock whose holder had died, not by a run finishing. */
+  tookOver: boolean;
   release(): void;
 }
 
@@ -320,9 +387,12 @@ export interface RunLock {
  * seconds), not a pid: pids are recycled within seconds on Windows and mean nothing across containers. While waiting
  * the caller holds nothing, so there is no deadlock; when the wait runs out the run simply proceeds as before.
  */
-export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS): Promise<RunLock> {
-  const started = Date.now();
-  const none = (): RunLock => ({ held: false, waitedMs: Date.now() - started, release: () => {} });
+export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS, onWait?: () => void): Promise<RunLock> {
+  const started = performance.now(); // monotonic: a clock step must not stretch the wait past the hook's timeout
+  const waited = () => Math.round(performance.now() - started);
+  let tookOver = false;
+  let told = false;
+  const none = (): RunLock => ({ held: false, waitedMs: waited(), tookOver, release: () => {} });
   let file: string;
   try {
     file = join(ensureStateDir(root), LOCK_FILE);
@@ -330,22 +400,26 @@ export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS): Promi
     return none();
   }
   const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
-  const tokenOf = (): string | null => tryReadJsonFile<{ token?: string }>(file)?.token ?? null;
+  const holder = (): { token?: string; pid?: number } | null => tryReadJsonFile<{ token?: string; pid?: number }>(file);
+  const tokenOf = (): string | null => holder()?.token ?? null;
   for (;;) {
     try {
       writeFileSync(file, JSON.stringify({ pid: process.pid, token, startedAt: Date.now() }), { flag: 'wx' });
-      const beat = setInterval(() => {
+      const touch = () => {
         try {
           const now = new Date();
           utimesSync(file, now, now);
         } catch {
           // the next waiter may take over; the run itself is unaffected
         }
-      }, LOCK_BEAT_MS);
+      };
+      touch(); // the file system (a network share) may have stamped the create with its own, older clock
+      const beat = setInterval(touch, LOCK_BEAT_MS);
       beat.unref();
       return {
         held: true,
-        waitedMs: Date.now() - started,
+        waitedMs: waited(),
+        tookOver,
         release: () => {
           clearInterval(beat);
           try {
@@ -362,16 +436,24 @@ export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS): Promi
     }
     try {
       const st = statSync(file);
-      if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+      const age = Date.now() - st.mtimeMs;
+      const judged = holder();
+      if (age > LOCK_STALE_MS || (age > LOCK_DEAD_PID_MS && pidGone(judged?.pid))) {
         // Take over only the lock that was judged stale: if a new holder appeared in between, its token or mtime differs.
-        const judged = tokenOf();
         const again = statSync(file);
-        if (again.mtimeMs === st.mtimeMs && tokenOf() === judged) rmSync(file, { force: true });
+        if (again.mtimeMs === st.mtimeMs && tokenOf() === (judged?.token ?? null)) {
+          rmSync(file, { force: true });
+          tookOver = true;
+        }
       }
     } catch {
       // it vanished or cannot be read: the next round tries to take it
     }
-    if (Date.now() - started >= waitMs) return none();
+    if (waited() >= waitMs) return none();
+    if (!told) {
+      told = true;
+      onWait?.();
+    }
     await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
   }
 }

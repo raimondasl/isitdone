@@ -52,8 +52,8 @@ export function insideRepo(path: string): boolean {
  * outside the test paths are sniffed for an inline `#[cfg(test)]` module / `@Test` / `[Fact]` (working tree first,
  * then the base), so an edited inline test module is not invisible to the warn-only hook.
  */
-export function checkEditedFile(cwd: string, file: string, base = 'HEAD', diff?: () => DiffResult): EditCheck | null {
-  const top = gitTopLevel(cwd);
+export function checkEditedFile(cwd: string, file: string, base = 'HEAD', diff?: () => DiffResult, knownTop?: string): EditCheck | null {
+  const top = knownTop ?? gitTopLevel(cwd);
   if (!top) return null;
   const path = toRepoPath(top, file, cwd);
   if (!insideRepo(path)) return null;

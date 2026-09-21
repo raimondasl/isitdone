@@ -2,9 +2,12 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFile
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { dirtyPathSet } from '../src/git.js';
-import { readState, runEditHook, runHook } from '../src/hook.js';
+import { readState, runEditHook, runHook, writeState } from '../src/hook.js';
+import { verify } from '../src/verify.js';
 import { ACTIVE_WINDOW_MS, acquireRunLock, attribute, liveSessionsNote, mentionContext, mentions, readSessions, recordEdits, sessionKey } from '../src/sessions.js';
 import { FAIL, PASS, nodePkg, tempRepo, type TempRepo } from './helpers.js';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let repo: TempRepo | null = null;
 afterEach(() => {
@@ -67,6 +70,22 @@ describe('attribution needs proof of a concurrent session', () => {
     expect(attribute([repo.root], 'claude', 's2', () => dirtyPathSet(repo!.root), now)?.foreign.map((f) => f.path)).toEqual(['src/a.js']);
   });
 
+  it('what a session finished and verified is not work in progress: only edits after its last passing stop count', () => {
+    repo = twoFileRepo({ 'src/c.js': 'ok\n' });
+    const now = Date.now();
+    const iso = (t: number) => new Date(t).toISOString();
+    for (const f of ['src/a.js', 'src/b.js', 'src/c.js']) repo.write(f, 'changed\n');
+    recordEdits(repo.root, 'claude', 's1', ['src/a.js'], now - 20 * MIN);
+    // a helper session edited b.js and c.js, passed its stop, and exited (or is idle): nothing of it is in progress
+    recordEdits(repo.root, 'claude', 'helper', ['src/b.js', 'src/c.js'], now - 10 * MIN);
+    writeState(repo.root, { host: 'claude', sessionId: 'helper', turnId: null, attempts: 0, loopCount: null, lastTree: null, firstSeen: iso(now - 10 * MIN), lastPassAt: iso(now - 9 * MIN), updatedAt: iso(now - 9 * MIN) });
+    expect(attribute([repo.root], 'claude', 's1', () => dirtyPathSet(repo!.root), now)).toBeNull();
+    expect(liveSessionsNote([repo.root], () => dirtyPathSet(repo!.root), now)).toBeNull();
+    // it gets a new prompt and edits c.js again: that file, and only that file, is in progress
+    recordEdits(repo.root, 'claude', 'helper', ['src/c.js'], now - 2 * MIN);
+    expect(attribute([repo.root], 'claude', 's1', () => dirtyPathSet(repo!.root), now)?.foreign.map((x) => x.path)).toEqual(['src/c.js']);
+  });
+
   it('counts only positive, recent evidence: committed files, long-quiet sessions and id-less payloads prove nothing', () => {
     repo = twoFileRepo();
     const now = Date.now();
@@ -119,9 +138,9 @@ describe('mentions', () => {
   const REPO = [
     'src/a.ts', 'src/a.tsx', 'src/index.ts', 'packages/a/src/index.ts', 'packages/a/src/foo.js', 'packages/b/src/bar.js', 'utils.js', 'test/utils.js', 'conftest.py', 'tests/conftest.py',
     'backend/app/calc.py', 'pkg/orders/handler_test.go', 'pkg/users/handler_test.go', 'internal/scan/scanner_test.go', 'src/test/java/com/x/ScannerTest.java', 'app/(group)/[id]/page.tsx',
-    'src/reporadar/scan.py', 'tests/test_scan.py', 'src/pkg/utils.py',
+    'src/reporadar/scan.py', 'tests/test_scan.py', 'src/pkg/utils.py', 'my dir/sub dir/thing.py',
   ];
-  const named = (output: string, file: string, fold = false) => mentions(mentionContext(output, 'C:/work/repo', REPO, fold), file);
+  const named = (output: string, file: string, fold = false, top = 'C:/work/repo') => mentions(mentionContext(output, top, [...REPO, ...REPO], fold), file);
 
   it('finds a path as tools print it', () => {
     expect(named('src/reporadar/scan.py:12: error: Incompatible types', 'src/reporadar/scan.py')).toBe(true);
@@ -151,6 +170,22 @@ describe('mentions', () => {
     expect(named('xsrc/a.ts:1', 'src/a.ts')).toBe(false);
   });
 
+  it('copes with spaces and brackets: a top-level with spaces, a directory with spaces, a Next.js path inside a stack frame', () => {
+    const top = 'C:/Users/John Smith/OneDrive - Company/repo';
+    expect(named(String.raw`C:\Users\John Smith\OneDrive - Company\repo\src\a.ts(3,5): error TS2322`, 'src/a.ts', false, top)).toBe(true);
+    expect(named(String.raw`C:\Users\John Smith\OneDrive - Company\repo\utils.js:3`, 'utils.js', false, top)).toBe(true); // anchored: test/utils.js does not matter
+    expect(named(String.raw`C:\Users\John Smith\OneDrive - Company\repo\test\utils.js:3`, 'utils.js', false, top)).toBe(false);
+    expect(named('my dir/sub dir/thing.py:4: error', 'my dir/sub dir/thing.py')).toBe(true);
+    expect(named('    at Page (app/(group)/[id]/page.tsx:4:2)', 'app/(group)/[id]/page.tsx')).toBe(true);
+  });
+
+  it('stays linear on one enormous line', () => {
+    const line = 'q/a.ts/'.repeat(150_000); // one unbroken megabyte with 150,000 base-name hits that resolve to nothing
+    const started = Date.now();
+    expect(named(line, 'src/a.ts')).toBe(false);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it('takes a bare Name.ext:line only for a distinctive name that is unique in the repository', () => {
     expect(named('    scanner_test.go:41: got 3, want 4', 'internal/scan/scanner_test.go')).toBe(true);
     expect(named('\tat com.x.ScannerTest.finds(ScannerTest.java:17)', 'src/test/java/com/x/ScannerTest.java')).toBe(true);
@@ -167,6 +202,20 @@ describe('Stop hook with another session in the same working tree', () => {
     edit(repo, 'task-2', 'src/a.js', 'fine\n');
     for (const n of [1, 2, 3]) {
       const o = await runHook({ host: 'claude', stdin: stop(repo.root, 'task-2', n === 1 ? {} : again) });
+      expect(o.decision).toBe('block');
+      expect(reasonOf(o.stdout)).toMatch(new RegExp(`attempt ${n}/3`));
+      expect(reasonOf(o.stdout)).not.toMatch(/ANOTHER AGENT SESSION/);
+    }
+  });
+
+  it('a helper session that passed and exited does not soften the gate: its files were good when it left them', async () => {
+    repo = twoFileRepo();
+    edit(repo, 's1', 'src/a.js', 'fine\n');
+    edit(repo, 'helper', 'src/b.js', 'also fine\n');
+    expect((await runHook({ host: 'claude', stdin: stop(repo.root, 'helper') })).decision).toBe('allow');
+    repo.write('src/b.js', 'BROKEN\n'); // s1 breaks the helper's finished file (through the shell: no record)
+    for (const n of [1, 2, 3]) {
+      const o = await runHook({ host: 'claude', stdin: stop(repo.root, 's1', n === 1 ? {} : again) });
       expect(o.decision).toBe('block');
       expect(reasonOf(o.stdout)).toMatch(new RegExp(`attempt ${n}/3`));
       expect(reasonOf(o.stdout)).not.toMatch(/ANOTHER AGENT SESSION/);
@@ -253,9 +302,41 @@ describe('Stop hook with another session in the same working tree', () => {
     expect(second.decision).toBe('block');
     expect(second.attempts).toBe(2);
     expect(JSON.stringify(JSON.parse(second.stdout))).toMatch(/ANOTHER AGENT SESSION/);
+    expect(JSON.stringify(JSON.parse(second.stdout))).toMatch(/no record of which files YOU edited/);
+    expect(JSON.stringify(JSON.parse(second.stdout))).not.toMatch(/not yours/);
     const third = await runHook({ host: 'cursor', stdin: cursor(2) });
     expect(third.decision).toBe('block');
     expect(third.attempts).toBe(3);
+  });
+
+  it('strict integrity is not relaxed for a session that has no edit records of its own', async () => {
+    const test = "it('adds', () => { expect(add(1, 1)).toBe(2); });\n";
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }), '.isitdone.json': JSON.stringify({ integrity: 'strict' }), 'src/math.test.ts': test } });
+    const cursor = (loop: number) => JSON.stringify({ conversation_id: 'c1', generation_id: `g${loop}`, workspace_roots: [repo!.root], hook_event_name: 'stop', status: 'completed', loop_count: loop });
+    expect((await runHook({ host: 'cursor', stdin: cursor(0) })).decision).toBe('allow');
+    edit(repo, 's2', 'src/math.test.ts', test.replace("it('adds'", "it.skip('adds'"));
+    const o = await runHook({ host: 'cursor', stdin: cursor(0) });
+    expect(o.decision).toBe('block');
+    expect(JSON.stringify(JSON.parse(o.stdout))).toMatch(/weakened the tests/);
+  });
+
+  it('where a continuation is only inferred, a telling from an abandoned turn does not release the next one unblocked', async () => {
+    repo = twoFileRepo();
+    const flagless = (session: string) => JSON.stringify({ session_id: session, transcript_path: '/x.jsonl', cwd: repo!.root, permission_mode: 'default', hook_event_name: 'Stop', last_assistant_message: DONE });
+    edit(repo, 's1', 'src/a.js', 'fine\n');
+    edit(repo, 's2', 'src/b.js', 'BROKEN\n');
+    process.env.CONTINUE_PROJECT_DIR = repo.root; // Continue drives the Claude hook shape without stop_hook_active
+    try {
+      expect((await runHook({ host: 'claude', stdin: flagless('s1') })).decision).toBe('block');
+      // the user interrupted that turn; a quarter of an hour later a new turn ends with the same kind of failure
+      const st = readState(repo.root, 'claude', 's1');
+      writeState(repo.root, { ...st!, updatedAt: new Date(Date.now() - 15 * MIN).toISOString() });
+      edit(repo, 's2', 'src/b.js', 'BROKEN still\n');
+      const next = await runHook({ host: 'claude', stdin: flagless('s1') });
+      expect(next.decision).toBe('block');
+    } finally {
+      delete process.env.CONTINUE_PROJECT_DIR;
+    }
   });
 
   it('"otherSessions": "ignore" switches off the note, the single block and the run lock', async () => {
@@ -297,6 +378,27 @@ describe('Stop hook with another session in the same working tree', () => {
   });
 });
 
+describe('a check run that overlapped someone\'s edits', () => {
+  const SLOW_PASS = 'node -e "setTimeout(function(){ process.exit(0); }, 3000)"';
+  for (const recorded of [true, false]) {
+    it(`is not reused by the stop that waited for it (${recorded ? 'recorded edit: receipt bound to the tree the run started on' : 'unrecorded edit: the waiter runs for itself'})`, async () => {
+      repo = tempRepo({ files: { 'package.json': nodePkg({ test: SLOW_PASS }), 'src/a.js': 'ok\n' } });
+      const root = repo.root;
+      const first = verify({ root, config: {}, profile: 'full', lockWaitMs: 20_000 });
+      await sleep(700);
+      repo.write('src/a.js', 'edited while the first run was already going\n');
+      if (recorded) recordEdits(root, 'claude', 'other', ['src/a.js']);
+      const second = verify({ root, config: {}, profile: 'full', lockWaitMs: 20_000 });
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.ok).toBe(true);
+      expect(b.lock?.waitedMs ?? 0).toBeGreaterThan(1000);
+      expect(b.cached).toBe(false); // the first run's PASS says nothing about the edited tree
+      expect(b.ran).toHaveLength(1);
+      if (recorded) expect(a.warnings.join(' ')).toMatch(/files were edited while the checks ran/);
+    }, 60_000);
+  }
+});
+
 describe('run lock', () => {
   it('lets one check run at a time, gives up waiting rather than hanging, and is reusable after release', async () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({}) } });
@@ -324,6 +426,17 @@ describe('run lock', () => {
     const a = await acquireRunLock(repo.root, 1000);
     expect(a.held).toBe(true);
     a.release();
+    // a holder whose pid is gone here and that missed two beats is dead; the same age with a live pid is not
+    writeFileSync(file, JSON.stringify({ pid: 2 ** 22 + 12345, token: 'dead', startedAt: Date.now() }));
+    const missedTwoBeats = new Date(Date.now() - 15_000);
+    utimesSync(file, missedTwoBeats, missedTwoBeats);
+    const c = await acquireRunLock(repo.root, 1000);
+    expect(c.held).toBe(true);
+    expect(c.tookOver).toBe(true);
+    c.release();
+    writeFileSync(file, JSON.stringify({ pid: process.pid, token: 'alive', startedAt: Date.now() }));
+    utimesSync(file, missedTwoBeats, missedTwoBeats);
+    expect((await acquireRunLock(repo.root, 50)).held).toBe(false);
     writeFileSync(file, ''); // left empty by a process that died between create and write
     utimesSync(file, old, old);
     const b = await acquireRunLock(repo.root, 1000);

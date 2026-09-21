@@ -139,6 +139,8 @@ export interface OtherSessionNote {
   lastActive: string | null;
   /** Nothing in the failing output names a file this session edited: it is told once and released after the next run. */
   soft: boolean;
+  /** This session has no edit records (no post-edit hook on its host, or shell-only edits): whose the files are is one-sided knowledge. */
+  ownUnknown: boolean;
 }
 
 const MAX_NOTE_FILES = 10;
@@ -150,7 +152,11 @@ function otherSessionLines(note: OtherSessionNote): string[] {
     if (xs.length > MAX_NOTE_FILES) lines.push(`  ... ${xs.length - MAX_NOTE_FILES} more`);
   };
   lines.push(`ANOTHER AGENT SESSION HAS BEEN WORKING IN THIS SAME DIRECTORY WHILE YOU WERE${note.lastActive ? ` (its last hook activity: ${note.lastActive})` : ''}. The checks see its unfinished work too.`);
-  if (note.foreign.length > 0) {
+  if (note.foreign.length > 0 && note.ownUnknown) {
+    lines.push('It has unfinished edits in these uncommitted files (isitdone has no record of which files YOU edited, so you may have changed some of them too):');
+    list(note.foreign);
+    lines.push('Do not revert or discard the other session\'s changes, and do not run git commands that would (checkout, restore, reset, stash, clean). Where you changed one of these files yourself, fix only your own change.');
+  } else if (note.foreign.length > 0) {
     lines.push('These uncommitted files are its work in progress, not yours:');
     list(note.foreign);
     lines.push('Do not edit, revert or "fix" them, and do not run git commands that would discard them (checkout, restore, reset, stash, clean).');
@@ -202,7 +208,9 @@ export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempt
   if (onlyIntegrity) {
     lines.push('Restore the removed or weakened tests (or explain to the user why the change to the tests is correct), then run `npx isitdone` before claiming completion.');
   } else if (otherSession && otherSession.soft) {
-    lines.push('Nothing in this output names a file you edited, so first work out whether your change caused it (a changed type, signature or fixture can break a file you never opened). If it did, fix YOUR change, in your own files. If it did not, tell the user exactly that and stop: isitdone will run the checks once more and let you stop if the output still names none of your files. Do not skip, delete or weaken tests to make this pass.');
+    lines.push(`Nothing in this output names a file you edited, so first work out whether your change caused it (a changed type, signature or fixture can break a file you never opened). If it did, fix YOUR change, in your own files. If it did not, tell the user exactly that and stop: ${attempt < maxAttempts ? 'isitdone will run the checks once more and let you stop if the output still names none of your files' : 'this was the last block isitdone issues this turn'}. Do not skip, delete or weaken tests to make this pass.`);
+  } else if (otherSession && otherSession.foreign.length > 0 && otherSession.ownUnknown) {
+    lines.push('Fix the failures your own changes caused, then run `npx isitdone`. Do not undo the other session\'s changes to get there; where a failure is its doing, leave it and tell the user. Do not skip, delete or weaken tests to make this pass.');
   } else if (otherSession && otherSession.foreign.length > 0) {
     lines.push('Fix the failures in your own files, then run `npx isitdone`. Failures that remain in the other session\'s files are not yours to fix: leave them and tell the user. Do not skip, delete or weaken tests to make this pass.');
   } else {

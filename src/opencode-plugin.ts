@@ -126,8 +126,8 @@ export const IsItDone = async ({ client, directory, worktree }) => {
         if (!s || !s.parentID) break;
         owner = s.parentID;
       }
+      owners.set(id, owner);
     } catch {}
-    owners.set(id, owner);
     return owner;
   };
   const hooks = {
