@@ -88,7 +88,7 @@ isitdone history  ~/.claude/projects
   69% of "done" claims had no passing test run behind them.
 ```
 
-That is the author's real result over seven months of sessions. Post yours. The longer story of why the gate sits where it does is in [docs/why.md](docs/why.md).
+That is the author's real result over seven months of sessions. Post yours. The longer story of why the gate sits where it does is in [docs/why.md](docs/why.md) (also [on DEV](https://dev.to/raimondasl/69-of-my-coding-agents-done-claims-werent-here-is-the-gate-i-put-in-front-of-them-lho), where comments are open).
 
 ## Install
 
