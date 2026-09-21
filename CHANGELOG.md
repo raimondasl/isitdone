@@ -4,6 +4,22 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-20
+
+### Fixed
+
+- Two agent sessions in one working tree no longer get blamed for each other's work. The checks see the whole tree, so the session that stopped first was blocked for the other session's unfinished files and told to fix them, which invites it to clobber work that is not its own (reported from a repository with two Claude Code sessions). Now the post-edit hook records which session edited which file (`.isitdone/sessions/*.edits`: paths and timestamps, local), and the Stop hook asks whose files a failure names:
+  - only files another session (active in the last 30 minutes) has uncommitted edits in: the stop is allowed, the user is told why, and the receipt still says FAIL;
+  - this session's files: blocked as before, and the reason opens with the other session's files and the instruction not to edit, revert or "fix" them or run git commands that would discard them;
+  - nobody's files (a bare "3 failed"): blocked once instead of `maxAttempts` times;
+  - test-integrity findings in the other session's files are not reported as this session's doing and do not block it in strict mode.
+  Only positive evidence counts: a dirty file no session recorded, or one left by a session that went quiet, is treated as before. Hosts with a post-edit hook record edits (Claude Code, Codex, Gemini CLI, Qwen Code, Devin, OpenCode); sessions on other hosts still respect what those recorded. `"otherSessions": "ignore"` restores the old behaviour. The README section "Two sessions in one working tree" has the details and recommends a git worktree per session for long parallel work.
+- Check runs from the Stop hook are serialised per project (`.isitdone/run.lock`): a second session's stop waits up to three minutes for the run in progress instead of running the suite on top of it (shared caches, build output and ports made both fail for reasons neither change caused), then reuses its PASS receipt when the tree is unchanged. A lock whose holder died, or that is older than 30 minutes, is taken over; when the wait runs out the run goes ahead as before.
+
+### Changed
+
+- The post-edit hook records the edit even when `"integrity": "off"` silences its warning.
+
 ## [0.5.2] - 2026-09-20
 
 ### Changed

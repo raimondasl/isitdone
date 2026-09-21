@@ -42,7 +42,7 @@ export function toRepoPath(top: string, file: string, cwd: string = top): string
 }
 
 /** `relative()` yields ".." outside the repo, or (Windows, another drive or a UNC share) an absolute path. */
-function insideRepo(path: string): boolean {
+export function insideRepo(path: string): boolean {
   return path !== '' && !path.startsWith('..') && !isAbsolute(path) && !/^[A-Za-z]:/.test(path) && !path.startsWith('//');
 }
 

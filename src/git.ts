@@ -131,6 +131,25 @@ export function workingTreeHash(top: string, depth = 0): { tree: string | null; 
   }
 }
 
+/** Every uncommitted path (modified, added, deleted, untracked; both sides of a rename), relative to the top-level. */
+export function dirtyPathSet(top: string): Set<string> {
+  const status = git(['status', '--porcelain', '-z', '--untracked-files=all', '--', '.', `:(exclude)${RECEIPT_DIR}`], top);
+  const paths = new Set<string>();
+  if (!status.ok) return paths;
+  const parts = status.stdout.split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i] as string;
+    if (entry.length < 4) continue;
+    paths.add(entry.slice(3));
+    // "R  new\0old\0": the original path follows as its own field.
+    if (entry[0] === 'R' || entry[0] === 'C' || entry[1] === 'R' || entry[1] === 'C') {
+      const old = parts[++i];
+      if (old) paths.add(old);
+    }
+  }
+  return paths;
+}
+
 export function gitInfo(cwd: string): GitInfo {
   const top = gitTopLevel(cwd);
   if (!top) {

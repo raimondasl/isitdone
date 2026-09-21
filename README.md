@@ -239,6 +239,21 @@ Details that matter in practice: one verification runs at a time per repository,
 5. **Scan the diff for weakened tests.** Deleted test files, new `.skip`/`.only`/`xfail`, dropped assertions, matchers downgraded (`toStrictEqual` to `toEqual`, `toThrow("msg")` to `toThrow()`, `assertEqual` to `assertTrue`), widened tolerances, empty `catch`/`except: pass`, and neutered configuration (`|| true`, `--passWithNoTests`, `continue-on-error`, `testPathIgnorePatterns`, `-DskipTests`, `ignoreFailures`, `cargo test -- --skip`, removed CI test steps). JS/TS, Python, Go, Rust (`#[ignore]`, `#[should_panic]` loosened, `assert_eq!` to `is_ok()`, inline `#[cfg(test)]` modules found by content), Java/Kotlin (JUnit 4/5, TestNG, AssertJ, Hamcrest; `@Disabled`, `assumeTrue(false)`, `assertEquals` to `assertNotNull`; Kotlin is best effort for JUnit and kotlin.test) and C# (xUnit, NUnit, MSTest; `Skip =`, `[Ignore]`, `Assert.Equal` to `Assert.NotNull`); the build configuration scanned includes Cargo/nextest, Maven/Gradle, csproj/runsettings/xunit.runner.json and the common CI files. Findings are reported with a before/after line (`Tests 47 -> 44   Assertions 112 -> 104   Skipped 0 -> 1`) and recorded in the receipt; with `"integrity": "strict"` (or `--strict`) high/critical findings block the stop even when the checks pass. Suppress a line with `// isitdone: allow <reason>`; suppressions are reported, never hidden, and `--ci` treats new ones as findings.
 6. **Never loop forever.** The hook honours each host's `stop_hook_active` / `loop_count` (and counts attempts itself for hosts that send neither), counts its own attempts per session (default cap 3), and after the cap lets the agent stop with a visible warning. Malformed stdin, a broken config, or an internal error always allow the stop: `isitdone` must never brick the agent.
 
+## Two sessions in one working tree
+
+The checks see the whole working tree. When two agent sessions work in the same directory, that tree holds the other session's unfinished files too, and a gate that ignores this blames whichever session stops first and tells it to "fix" work that is not its own. `isitdone` keeps the two apart:
+
+- The post-edit hook records which session edited which file (`.isitdone/sessions/`: paths and timestamps, local, never committed).
+- A failure whose output names only files that **another session active in the last 30 minutes** has uncommitted edits in does not block this session. The user is told why, and the receipt still says FAIL, because the tree is not verified.
+- When the output names this session's files, the stop is blocked as usual, and the reason starts with the other session's files and a plain instruction: do not edit, revert or "fix" them, and do not run git commands that would discard them (`checkout`, `restore`, `reset`, `stash`, `clean`).
+- When the output names nobody's files (a bare `3 failed`), the session is blocked once instead of three times.
+- Test-integrity findings in the other session's files are not reported as this session's doing and do not block it in strict mode.
+- Check runs are serialised per project: a second session's stop waits (up to three minutes) for the first session's run instead of running the suite on top of it, and reuses its PASS receipt when the tree has not changed since.
+
+Only positive evidence counts. A dirty file that no session recorded (your own edit, a formatter, a shell command) belongs to nobody and is treated as before, and a session that went quiet more than 30 minutes ago no longer owns its leftovers. The records come from the post-edit hook, so this works on Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode; a session on a host without that hook records nothing, but still respects the files other sessions recorded. `"otherSessions": "ignore"` turns all of it off.
+
+This makes sharing a directory safe, not ideal: a whole-repo check still cannot pass while the other session's half of the tree is broken. For long parallel work, give each session its own [git worktree](https://git-scm.com/docs/git-worktree); each gets its own `.isitdone/` and its own receipt.
+
 ## CLI
 
 ```
@@ -284,6 +299,7 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
   "build": false,             // include the build script even when tests exist
   "claimPatterns": ["ship it"], // extra completion-claim regexes
   "integrity": "warn",        // warn (default) | strict | off
+  "otherSessions": "respect", // respect (default) | ignore: see "Two sessions in one working tree"
   "history": { "exclude": ["client-x"] }  // project paths to skip in `isitdone history`
 }
 ```

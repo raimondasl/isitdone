@@ -33,6 +33,11 @@ export interface IsitdoneConfig {
   build?: boolean;
   /** Test-integrity scan: warn (default) reports weakened tests, strict blocks on high/critical findings, off disables it. */
   integrity?: 'warn' | 'strict' | 'off';
+  /**
+   * Two agent sessions in one working tree: "respect" (default) does not hold a session to failures in files another
+   * live session is editing and tells it to leave them alone; "ignore" treats the tree as this session's alone.
+   */
+  otherSessions?: 'respect' | 'ignore';
   /** Settings for `isitdone history`. */
   history?: {
     /** Case-insensitive substrings of project paths to skip. */
@@ -98,6 +103,9 @@ function validate(c: IsitdoneConfig, where: string): IsitdoneConfig {
   }
   if (c.integrity !== undefined && !['warn', 'strict', 'off'].includes(c.integrity)) {
     throw new Error(`${where}: integrity must be one of warn, strict, off`);
+  }
+  if (c.otherSessions !== undefined && !['respect', 'ignore'].includes(c.otherSessions)) {
+    throw new Error(`${where}: otherSessions must be one of respect, ignore`);
   }
   if (c.history !== undefined) {
     if (typeof c.history !== 'object' || c.history === null) throw new Error(`${where}: history must be an object`);

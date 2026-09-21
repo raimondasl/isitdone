@@ -4,8 +4,9 @@ import { loadConfig } from './config.js';
 import { toSarif } from './sarif.js';
 import { detectChecks } from './detect.js';
 import { doctor } from './doctor.js';
-import { findRoot, gitInfo } from './git.js';
+import { dirtyPathSet, findRoot, gitInfo } from './git.js';
 import { readStdin, runEditHook, runHook } from './hook.js';
+import { liveSessionsNote } from './sessions.js';
 import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
@@ -188,7 +189,12 @@ async function cmdRun(args: Args): Promise<number> {
     writeFileSync(resolve(args.flags['json-file']), JSON.stringify(toJson(res, state), null, 2) + '\n');
   }
   if (json) out(JSON.stringify(toJson(res, state), null, 2));
-  else out(formatReport(res, s));
+  else {
+    out(formatReport(res, s));
+    // The CLI cannot know which session is asking; on a failure it says who edited what, so nobody fixes the other's files.
+    const sessions = !res.ok && res.git.isRepo && config.otherSessions !== 'ignore' ? liveSessionsNote(root, dirtyPathSet(res.git.root)) : null;
+    if (sessions) out(s.yellow(sessions));
+  }
   return res.ok && !integrityBlocks(res) ? 0 : 1;
 }
 

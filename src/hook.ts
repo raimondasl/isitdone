@@ -1,22 +1,21 @@
-import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { findClaim } from './claims.js';
 import { loadConfig, type IsitdoneConfig } from './config.js';
 import { detectChecks } from './detect.js';
 import { collectDiff, type DiffResult } from './diff.js';
-import { checkEditedFile } from './editcheck.js';
+import { checkEditedFile, insideRepo, toRepoPath } from './editcheck.js';
 import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
-import { findRoot, gitTopLevel, RECEIPT_DIR } from './git.js';
+import { dirtyPathSet, findRoot, gitTopLevel, RECEIPT_DIR } from './git.js';
 import { getHost, type HookInput, type HostAdapter, type HostName } from './hosts.js';
 import { ensureStateDir } from './receipt.js';
-import { formatBlockReason, integrityBlocks } from './report.js';
+import { formatBlockReason, integrityBlocks, type OtherSessionNote } from './report.js';
+import { acquireRunLock, attribute, formatAgo, mentions, recordEdits, sessionKey, SESSIONS_DIR, type Attribution } from './sessions.js';
 import { verify, type ResolvedProfile, type VerifyResult } from './verify.js';
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
 /** Claude Code caps hook output at 10,000 characters. */
 const MAX_REASON_CHARS = 9000;
-const SESSIONS_DIR = 'sessions';
 const STATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** How the host is named in receipts (kept stable; older receipts already carry these). */
 const RECEIPT_HOST: Partial<Record<HostName, string>> = { claude: 'claude-code', gemini: 'gemini-cli', copilot: 'copilot-cli', qwen: 'qwen-code', junie: 'junie-cli', augment: 'auggie' };
@@ -31,6 +30,11 @@ export interface SessionState {
   /** Cursor: loop_count seen at the last stop. */
   loopCount: number | null;
   lastTree: string | null;
+  /**
+   * Attempts allowed for this turn when it is lower than maxAttempts: 1 while another session is editing the same
+   * working tree and the failure cannot be tied to this session's files.
+   */
+  cap?: number | null;
   updatedAt: string;
 }
 
@@ -61,8 +65,7 @@ export interface HookOptions {
 }
 
 function stateFile(root: string, host: string, sessionId: string | null): string {
-  const id = createHash('sha1').update(sessionId ?? 'anon').digest('hex').slice(0, 16);
-  return join(root, RECEIPT_DIR, SESSIONS_DIR, `${host}-${id}.json`);
+  return join(root, RECEIPT_DIR, SESSIONS_DIR, `${sessionKey(host, sessionId)}.json`);
 }
 
 export function readState(root: string, host: string, sessionId: string | null): SessionState | null {
@@ -138,6 +141,10 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 20) + '\n... (truncated)';
 }
 
+/** Check output kept per check for working out whose files a failure names. */
+const MAX_ATTRIBUTION_CHARS = 1024 * 1024;
+const SHARED_TREE_NOTE = ' Another session is editing this working tree, so isitdone blocks only once when it cannot tell whose change broke a check.';
+
 const GIVE_UP_MESSAGE = (n: number) => `isitdone: checks still failing after ${n} attempt${n === 1 ? '' : 's'}; allowing the agent to stop. Run \`npx isitdone\` to see what is failing.`;
 
 /**
@@ -196,11 +203,14 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   const continuation = isContinuation(input, prev);
   let attempts = continuation && prev ? prev.attempts : 0;
 
-  if (continuation && attempts >= maxAttempts) {
+  // A block issued while another session was editing the tree may have lowered the cap for this turn.
+  const cap = continuation && prev?.cap ? Math.min(prev.cap, maxAttempts) : maxAttempts;
+  if (continuation && attempts >= cap) {
     // Record this stop so the next one (same loop_count on Cursor) counts as a new turn. Hosts without a flag start
     // counting again: the turn ends with this allow, so their next stop can only follow a new prompt.
     if (!doctor && prev) writeState(root, { ...prev, attempts: input.stopHookActive === null ? 0 : prev.attempts, loopCount: input.loopCount, turnId: input.turnId, updatedAt: new Date().toISOString() });
-    return allow(`already blocked ${attempts} time(s) this turn (max ${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts), null, attempts);
+    const shared = cap < maxAttempts ? SHARED_TREE_NOTE : '';
+    return allow(`already blocked ${attempts} time(s) this turn (max ${cap}); letting the agent stop`, GIVE_UP_MESSAGE(attempts) + shared, null, attempts);
   }
 
   const { profile, claim, why } = resolveProfile(config, input, opts.profile);
@@ -210,56 +220,129 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     return allow(`${input.backgroundTasks} background task(s) still running and no completion claim; treating this stop as a pause`);
   }
 
-  const result = await verify({
-    root,
-    config,
-    profile,
-    claim,
-    host: RECEIPT_HOST[host.name] ?? host.name,
-    useCache: !doctor,
-    dryRun: doctor,
-  });
-  const state = (n: number): SessionState => ({
+  // Two sessions stopping together must not run the suite on top of each other; after the wait, a PASS receipt the
+  // other session just wrote for this exact tree is reused by verify().
+  const lock = doctor ? null : await acquireRunLock(root);
+  const output = new Map<string, string>();
+  let result: VerifyResult;
+  try {
+    result = await verify({
+      root,
+      config,
+      profile,
+      claim,
+      host: RECEIPT_HOST[host.name] ?? host.name,
+      useCache: !doctor,
+      dryRun: doctor,
+      onOutput: doctor ? undefined : (check, chunk) => output.set(check.id, ((output.get(check.id) ?? '') + chunk).slice(-MAX_ATTRIBUTION_CHARS)),
+    });
+  } finally {
+    lock?.release();
+  }
+  const state = (n: number, turnCap: number | null = null): SessionState => ({
     host: host.name,
     sessionId: input.sessionId,
     turnId: input.turnId,
     attempts: n,
     loopCount: input.loopCount,
     lastTree: result.git.tree,
+    cap: turnCap,
     updatedAt: new Date().toISOString(),
   });
-  const notes = [...result.warnings];
-  const it = result.integrity;
+
+  // Whose uncommitted files are these? Findings and failures in files another live session is editing are not this
+  // session's to fix, and telling it to fix them makes it clobber the other session's work.
+  const others = doctor || config.otherSessions === 'ignore' ? null : otherSessions(root, host.name, input.sessionId, result, output);
+  const view = others ? setAsideForeignFindings(result, new Set(others.attribution.foreign.map((x) => x.path))) : result;
+
+  const notes = [...view.warnings];
+  if (lock && lock.waitedMs > 5000) notes.push(`waited ${Math.round(lock.waitedMs / 1000)} s for another session's check run in this directory${lock.held ? '' : ' and then ran alongside it'}`);
+  const it = view.integrity;
   const weakened = it ? it.findings.filter((f) => !f.suppressed) : [];
-  if (result.ok && weakened.length > 0 && !integrityBlocks(result)) {
+  if (view.ok && weakened.length > 0 && !integrityBlocks(view)) {
     notes.push(`the change weakened tests (${weakened.length} finding${weakened.length === 1 ? '' : 's'}: ${weakened.slice(0, 3).map((f) => f.message).join('; ')}); run \`npx isitdone\` for details`);
   }
   const warn = notes.length ? `isitdone: ${notes.join('; ')}` : undefined;
 
-  if (result.ok && !integrityBlocks(result)) {
+  if (view.ok && !integrityBlocks(view)) {
     if (!doctor) writeState(root, state(0));
-    return allow(`${result.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, result, 0);
+    return allow(`${view.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, view, 0);
   }
 
+  const failedCount = view.ran.filter((r) => r.status !== 'PASS').length;
+  // Tied to this session: the failing output names a file it edited, or its own test changes block in strict mode.
+  const tiedToMe = others !== null && (others.mineNamed || integrityBlocks(view));
+  if (others && others.foreignNamed.length > 0 && !tiedToMe) {
+    if (!doctor) writeState(root, state(0));
+    const names = others.foreignNamed.slice(0, 5).join(', ') + (others.foreignNamed.length > 5 ? ', ...' : '');
+    const message = `isitdone: ${failedCount} check${failedCount === 1 ? '' : 's'} failed, but the output only names files another session is editing (${names}), so this session was not blocked. The receipt says FAIL; run \`npx isitdone\` once both sessions are finished.`;
+    return allow(`${failedCount} check(s) failed only in files another session is editing (${why})`, warn ? `${message} (${warn})` : message, view, 0);
+  }
+  // Another session has work in progress here and nothing ties the failure to this session: block once, not three times.
+  const turnCap = others && others.attribution.foreign.length > 0 && !tiedToMe ? 1 : maxAttempts;
+
   attempts += 1;
-  if (!doctor && !writeState(root, state(attempts))) {
+  if (!doctor && !writeState(root, state(attempts, turnCap < maxAttempts ? turnCap : null))) {
     // Without persisted state the attempts cap cannot work; blocking could loop forever.
-    return allow('checks failed but session state could not be written; allowing to avoid an unbounded loop', `isitdone: checks failed but .isitdone/ is not writable, so the stop was allowed without enforcement. Run \`npx isitdone\` to see the failures.`, result, attempts);
+    return allow('checks failed but session state could not be written; allowing to avoid an unbounded loop', `isitdone: checks failed but .isitdone/ is not writable, so the stop was allowed without enforcement. Run \`npx isitdone\` to see the failures.`, view, attempts);
   }
-  if (attempts > maxAttempts) {
-    return allow(`checks failed but attempts (${attempts}) exceed max (${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts - 1), result, attempts);
+  if (attempts > turnCap) {
+    if (!doctor) writeState(root, state(input.stopHookActive === null ? 0 : attempts, turnCap < maxAttempts ? turnCap : null));
+    return allow(`checks failed but attempts (${attempts}) exceed max (${turnCap}); letting the agent stop`, GIVE_UP_MESSAGE(attempts - 1) + (turnCap < maxAttempts ? SHARED_TREE_NOTE : ''), view, attempts);
   }
-  let reason = formatBlockReason(result, attempts, maxAttempts);
+  let reason = formatBlockReason(view, attempts, turnCap, others ? sessionNote(others.attribution) : null);
   if (warn) reason += `\n(${warn})`;
   return {
     stdout: host.block(truncate(reason, MAX_REASON_CHARS)),
     stderr: '',
     exitCode: 0,
     decision: 'block',
-    why: `${result.ran.filter((r) => r.status !== 'PASS').length} check(s) failed (${why})`,
-    result,
+    why: `${failedCount} check(s) failed (${why})`,
+    result: view,
     attempts,
   };
+}
+
+interface OtherSessions {
+  attribution: Attribution;
+  /** The failing output names a file this session edited. */
+  mineNamed: boolean;
+  /** Files of other live sessions that the failing output names. */
+  foreignNamed: string[];
+}
+
+/** Null when no other live session has uncommitted edits here (the usual case), or on any error. */
+function otherSessions(root: string, hostName: string, sessionId: string | null, result: VerifyResult, output: Map<string, string>): OtherSessions | null {
+  if (!result.git.isRepo) return null;
+  try {
+    const attribution = attribute(root, hostName, sessionId, dirtyPathSet(result.git.root));
+    if (attribution.foreign.length === 0 && attribution.shared.length === 0) return null;
+    const prefix = relative(result.git.root, root).replace(/\\/g, '/');
+    const rootPrefix = prefix && !prefix.startsWith('..') ? `${prefix}/` : '';
+    const text = result.ran
+      .filter((r) => r.status !== 'PASS')
+      .map((r) => output.get(r.id) ?? r.tail.join('\n'))
+      .join('\n')
+      .replace(/\\/g, '/');
+    const named = (p: string) => mentions(text, p, rootPrefix);
+    return { attribution, mineNamed: [...attribution.mine].some(named), foreignNamed: attribution.foreign.map((x) => x.path).filter(named) };
+  } catch {
+    return null;
+  }
+}
+
+/** Test-integrity findings in another session's files neither block this session nor get reported as its doing. */
+function setAsideForeignFindings(result: VerifyResult, foreign: Set<string>): VerifyResult {
+  const it = result.integrity;
+  if (!it || foreign.size === 0 || !it.findings.some((f) => foreign.has(f.file) && !f.suppressed)) return result;
+  const findings = it.findings.map((f) => (foreign.has(f.file) && !f.suppressed ? { ...f, suppressed: 'another session is editing this file' } : f));
+  return { ...result, integrity: { ...it, findings, blocking: it.blocking.filter((f) => !foreign.has(f.file)) } };
+}
+
+function sessionNote(a: Attribution): OtherSessionNote {
+  const now = Date.now();
+  const list = (xs: Attribution['foreign']) => xs.map((x) => ({ path: x.path, ago: formatAgo(now - x.editedAt) }));
+  return { foreign: list(a.foreign), shared: list(a.shared), lastActive: a.otherLastActive === null ? null : formatAgo(now - a.otherLastActive) };
 }
 
 export interface EditHookOutcome {
@@ -283,13 +366,16 @@ export function runEditHook(opts: { host: string; stdin: string; cwd?: string; e
   const input = host.edit.parse(raw);
   if (input.files.length === 0) return silent('no file path in the payload');
   const cwd = input.cwd && existsSync(input.cwd) ? input.cwd : (opts.cwd ?? process.cwd());
+  const top = gitTopLevel(cwd);
+  if (!top) return silent('not inside a git repository');
+  // Remember who edited what: with two sessions in one working tree, the Stop hook must not hold one session to the
+  // other's unfinished files. host.parse reads the session id from the same payload fields the Stop event uses.
+  recordEdits(findRoot(cwd), host.name, host.parse(raw).sessionId, input.files.map((file) => toRepoPath(top, file, cwd)).filter(insideRepo));
   try {
     if (loadConfig(findRoot(cwd)).config.integrity === 'off') return silent('integrity scan is off in config');
   } catch {
     // a broken config is reported by the Stop hook; the edit hook stays quiet
   }
-  const top = gitTopLevel(cwd);
-  if (!top) return silent('not inside a git repository');
   // One working-tree diff per hook run, taken only once an edited file turns out to be worth scanning.
   let diff: DiffResult | null = null;
   const diffOnce = (): DiffResult => {

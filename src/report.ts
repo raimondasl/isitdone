@@ -130,10 +130,40 @@ export function integrityBlocks(res: VerifyResult): boolean {
   return res.integrityMode === 'strict' && (res.integrity?.blocking.length ?? 0) > 0;
 }
 
+/** Uncommitted files of another agent session working in the same directory, for the block reason. */
+export interface OtherSessionNote {
+  /** Files the other session edited and this one did not. */
+  foreign: { path: string; ago: string }[];
+  /** Files both sessions edited. */
+  shared: { path: string; ago: string }[];
+  lastActive: string | null;
+}
+
+const MAX_NOTE_FILES = 10;
+
+function otherSessionLines(note: OtherSessionNote): string[] {
+  const lines: string[] = [];
+  const list = (xs: OtherSessionNote['foreign']) => {
+    for (const x of xs.slice(0, MAX_NOTE_FILES)) lines.push(`  ${x.path}  (edited ${x.ago})`);
+    if (xs.length > MAX_NOTE_FILES) lines.push(`  ... ${xs.length - MAX_NOTE_FILES} more`);
+  };
+  lines.push(`ANOTHER AGENT SESSION IS WORKING IN THIS SAME DIRECTORY${note.lastActive ? ` (last active ${note.lastActive})` : ''}. The checks see its unfinished work too.`);
+  if (note.foreign.length > 0) {
+    lines.push('These uncommitted files are its work in progress, not yours:');
+    list(note.foreign);
+    lines.push('Do not edit, revert or "fix" them, and do not run git commands that would discard them (checkout, restore, reset, stash, clean).');
+  }
+  if (note.shared.length > 0) {
+    lines.push('Both of you have edited these; re-read them before editing and keep the other session\'s changes:');
+    list(note.shared);
+  }
+  return lines;
+}
+
 /**
  * The text an agent sees when its stop is blocked. Plain, bounded (~40 lines), actionable.
  */
-export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempts: number): string {
+export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempts: number, otherSession: OtherSessionNote | null = null): string {
   const lines: string[] = [];
   const failed = res.ran.filter((r) => r.status !== 'PASS');
   const timedOut = failed.filter((r) => r.status === 'TIMEOUT');
@@ -145,6 +175,7 @@ export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempt
     lines.push(`isitdone: NOT DONE. ${failed.length} check${failed.length === 1 ? '' : 's'} ${verb} on the current working tree (attempt ${attempt}/${maxAttempts}). [isitdone ${VERSION}]`);
   }
   if (res.claim) lines.push(`You claimed: "${res.claim}"`);
+  if (otherSession) lines.push('', ...otherSessionLines(otherSession));
   lines.push('');
   const w = cmdWidth(res.ran);
   for (const r of res.ran) lines.push(`  ${pad(r.cmd, w)}  ${statusWord(r)}  ${detail(r)}`.trimEnd());
@@ -168,6 +199,8 @@ export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempt
   }
   if (onlyIntegrity) {
     lines.push('Restore the removed or weakened tests (or explain to the user why the change to the tests is correct), then run `npx isitdone` before claiming completion.');
+  } else if (otherSession && otherSession.foreign.length > 0) {
+    lines.push('Fix only the failures your own changes caused. If what is left comes from the other session\'s files, tell the user exactly that and stop: isitdone does not hold you to failures in files you did not touch. Do not skip, delete or weaken tests to make this pass.');
   } else {
     lines.push('Fix the failures, then run `npx isitdone` and paste its output before claiming completion. Do not skip, delete or weaken tests to make this pass; if a check is wrong for this repo, say so explicitly to the user.');
   }
