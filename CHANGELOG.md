@@ -4,6 +4,26 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-21
+
+0.6.0 weakened the gate for ordinary single-session use; update with `npx isitdone update`. An adversarial review of 0.6.0 (four reviewers, each finding reproduced by a second agent) confirmed 19 of its 20 findings (several overlapping); this release is the redesign that answers them.
+
+### Fixed
+
+- **A conversation that had ended counted as "another live session" for 30 minutes.** After `/clear`, a restart or a new agent process, the previous conversation's uncommitted files were "foreign", so a single user's failing checks were waved through with no block (or one instead of three) and a false "another session is working here" instruction. Concurrency now needs proof: hook activity of the other session *after this session's first* (within two hours). A session on its own is gated exactly as in 0.5.2, and a regression test walks the `/clear` sequence through three blocks.
+- **Nothing is released without a block and a fresh run.** 0.6.0 let a stop through unblocked when the failing output named a file of the other session, without checking that it named *only* such files (a passing test file in a verbose listing was enough), and after its single "cannot tell" block it released the next stop without running anything, reporting "still failing" even when the agent had fixed it. Now a failure that names none of this session's files blocks once and asks the agent whether its change caused it; the next stop runs the checks again and only then releases (or passes, or blocks for the session's own files). A block that already carried the other-session instruction counts as the one telling.
+- **A session that cannot show what it edited gets no leniency.** Hosts without a post-edit hook (Cursor, Copilot CLI, Goose, Droid, Augment, Junie) and sessions that edited only through the shell were never "tied" to their own failures and were released for files they broke themselves, silently on hosts that cannot show a message. They are now gated as if alone, with the instruction to leave the other session's files alone.
+- **A lite failure in the other session's file hid this session's tests**: the full checks were skipped and the session released with its own tests never run. With a concurrent session the full checks run regardless.
+- **OpenCode subagents** recorded edits under the child session id while only the parent is graded, so a session's own subagent looked like another session. The shim now records under the top-level session (re-run `npx isitdone init --agent opencode` to refresh the generated plugin).
+- **Path matching.** A recorded path matched as the tail of any longer path (`utils.js` in `test/utils.js`, `src/index.ts` in `packages/a/src/index.ts`), root-level generic names bypassed the generic-name guard, a bare `handler_test.go:23` matched the wrong package, `a.ts` matched `a.ts.map`, forced colour (`tsc --pretty`, `pytest --color=yes`) glued escape codes to paths, and paths printed relative to a check's `cwd` or a workspace were missed. Matching now resolves the whole path token: repo-relative, absolute under the top-level, or a shorter tail that exactly one repository file ends with; bare names only when distinctive and unique; ANSI stripped; case-insensitive on Windows and macOS.
+- **Edit records are kept at the repository top-level**, so an edit made while the session's directory was inside a sub-project is no longer invisible to a stop at the top (and no stray `.isitdone/` appears in sub-projects). This session's own records no longer age out after 24 hours, and a long session's record file is compacted.
+- **Run lock.** Liveness is a heartbeat (the holder touches the lock every 5 s; 30 s without one means dead) instead of a pid, which Windows recycles within seconds and containers do not share; the wait is sized to fit inside the hook timeout that `init` registered (it could previously push a run past it, so the host cancelled the hook and the stop went through unverified); the lock is taken only after the cache check, so a cached PASS never waits; a stale-lock takeover re-checks the token and mtime it judged; Windows `EPERM`/`EBUSY` on create retries instead of abandoning the lock; every wait path honours the deadline; `"otherSessions": "ignore"` now skips the lock too.
+- The post-edit hook spawned git three times per call; once now.
+
+### Changed
+
+- Agent-facing wording states what is known ("another agent session has been working in this same directory while you were", "its last hook activity: 2 min ago") instead of asserting it is working now. The README section "Two sessions in one working tree" is rewritten around the rule "a session on its own is gated exactly as before", lists the limits (attribution follows where a failure is reported, not what caused it; which hosts can show the release message) and no longer calls sharing a directory "safe".
+
 ## [0.6.0] - 2026-09-20
 
 ### Fixed

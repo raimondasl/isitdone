@@ -28,6 +28,12 @@ export interface VerifyOptions {
   base?: string;
   /** CI mode for the integrity scan: new suppressions are findings. */
   ci?: boolean;
+  /**
+   * Called after the cache check, right before the first check runs, with the checks about to run (the Stop hook takes
+   * the per-project run lock here, so a cached PASS never waits). Resolve to true when time passed: the receipt is then
+   * evaluated again, because another run may just have proved this exact tree.
+   */
+  beforeRun?: (wanted: Check[]) => Promise<boolean>;
   /** Abort the run: the running check is killed, the remaining ones are skipped, and no receipt is written. */
   signal?: AbortSignal;
   onCheckStart?: (check: Check) => void;
@@ -107,7 +113,7 @@ export function receiptSatisfies(evaluation: ReceiptEvaluation, profile: Resolve
 export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const started = Date.now();
   const root = opts.root;
-  const git = gitInfo(root);
+  let git = gitInfo(root);
   const detection = detectChecks(root, opts.config);
   const ch = configHash(root);
   const before = evaluateReceipt(root, git, ch);
@@ -117,7 +123,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const integrityMode = opts.config.integrity ?? 'warn';
   const integrity = integrityMode === 'off' ? null : runIntegrity(git, { base: opts.base, ci: opts.ci }, warnings);
 
-  const base = { git, detection, profile: opts.profile, before, claim, warnings, integrity, integrityMode };
+  let base = { git, detection, profile: opts.profile, before, claim, warnings, integrity, integrityMode };
 
   if ((opts.useCache ?? true) && receiptSatisfies(before, opts.profile)) {
     return { ...base, ok: true, ran: [], skipped: [], receipt: before.receipt, cached: true, durationMs: Date.now() - started };
@@ -131,6 +137,15 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   if (wanted.length === 0) {
     // Nothing to verify; do not write a receipt that would vacuously say PASS.
     return { ...base, ok: true, ran: [], skipped, receipt: null, cached: false, durationMs: Date.now() - started };
+  }
+
+  if (opts.beforeRun && (await opts.beforeRun(wanted)) && (opts.useCache ?? true)) {
+    git = gitInfo(root);
+    const again = evaluateReceipt(root, git, ch);
+    base = { ...base, git, before: again };
+    if (receiptSatisfies(again, opts.profile)) {
+      return { ...base, ok: true, ran: [], skipped: [], receipt: again.receipt, cached: true, durationMs: Date.now() - started };
+    }
   }
 
   const env = childEnv(process.env, detection.env);

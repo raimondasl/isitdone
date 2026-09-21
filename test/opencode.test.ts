@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { OPENCODE_FOLLOWUP_MARKER, OPENCODE_PLUGIN_MARKER, parseOpencodePlugin, renderOpencodePlugin } from '../src/opencode-plugin.js';
 import { init, installedHooks } from '../src/init.js';
+import { sessionKey } from '../src/sessions.js';
 import { FAIL, PASS, nodePkg, tempRepo, type TempRepo } from './helpers.js';
 
 // Own bundle path so this file never races cli.test.ts, which builds into test/.build/isitdone.js.
@@ -45,7 +46,7 @@ const calls = [];
 const client = {
   app: { log: async () => ({}) },
   session: {
-    get: async () => ({ data: { id: "s1", parentID: scenario.parentID } }),
+    get: async (o) => ({ data: o.path.id === "s1" ? { id: "s1", parentID: scenario.parentID } : { id: o.path.id } }),
     messages: async () => ({ data: scenario.messages }),
     promptAsync: async (o) => { calls.push(o); return {}; },
   },
@@ -144,6 +145,16 @@ describe('OpenCode plugin shim', () => {
     expect(drive(repo.root, { tool: 'read', args: { filePath: file } }).output).toBe('ok');
     // without an edit command the shim registers no tool hook at all
     expect(drive(repo.root, { messages: [user('u1', 'go')] }, false).hasEdit).toBe(false);
+  });
+
+  it("records a subagent's edits under the session that is graded (its parent), not as another session's", () => {
+    repo = tempRepo({ files: { 'src/a.js': 'ok\n', 'package.json': nodePkg({ test: PASS }) } });
+    const file = join(repo.root, 'src', 'a.js');
+    const sessions = join(repo.root, '.isitdone', 'sessions');
+    drive(repo.root, { tool: 'edit', parentID: 'parent', args: { filePath: file, oldString: 'a', newString: 'b' } });
+    expect(readdirSync(sessions)).toEqual([`${sessionKey('opencode', 'parent')}.edits`]);
+    drive(repo.root, { tool: 'edit', args: { filePath: file, oldString: 'a', newString: 'b' } });
+    expect(readdirSync(sessions).sort()).toEqual([`${sessionKey('opencode', 'parent')}.edits`, `${sessionKey('opencode', 's1')}.edits`].sort());
   });
 });
 

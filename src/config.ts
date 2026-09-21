@@ -34,8 +34,9 @@ export interface IsitdoneConfig {
   /** Test-integrity scan: warn (default) reports weakened tests, strict blocks on high/critical findings, off disables it. */
   integrity?: 'warn' | 'strict' | 'off';
   /**
-   * Two agent sessions in one working tree: "respect" (default) does not hold a session to failures in files another
-   * live session is editing and tells it to leave them alone; "ignore" treats the tree as this session's alone.
+   * Two agent sessions in one working tree: "respect" (default) tells a session which uncommitted files belong to a
+   * session working alongside it, blocks it only once for a failure that names none of its own files, and serialises
+   * check runs; "ignore" treats the tree as this session's alone (edits are still recorded, nothing reads them).
    */
   otherSessions?: 'respect' | 'ignore';
   /** Settings for `isitdone history`. */

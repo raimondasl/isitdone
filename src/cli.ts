@@ -192,7 +192,7 @@ async function cmdRun(args: Args): Promise<number> {
   else {
     out(formatReport(res, s));
     // The CLI cannot know which session is asking; on a failure it says who edited what, so nobody fixes the other's files.
-    const sessions = !res.ok && res.git.isRepo && config.otherSessions !== 'ignore' ? liveSessionsNote(root, dirtyPathSet(res.git.root)) : null;
+    const sessions = !res.ok && res.git.isRepo && config.otherSessions !== 'ignore' ? liveSessionsNote([res.git.root, root], () => dirtyPathSet(res.git.root)) : null;
     if (sessions) out(s.yellow(sessions));
   }
   return res.ok && !integrityBlocks(res) ? 0 : 1;

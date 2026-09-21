@@ -150,6 +150,12 @@ export function dirtyPathSet(top: string): Set<string> {
   return paths;
 }
 
+/** Every tracked path, relative to the top-level (for telling which file a bare or partial path in check output means). */
+export function trackedPaths(top: string): string[] {
+  const r = git(['ls-files', '-z'], top);
+  return r.ok ? r.stdout.split('\0').filter((p) => p !== '') : [];
+}
+
 export function gitInfo(cwd: string): GitInfo {
   const top = gitTopLevel(cwd);
   if (!top) {
@@ -191,14 +197,14 @@ function hasProjectMarker(dir: string): boolean {
  * The project root: the nearest directory at or above `cwd` (never above the git top-level) that looks like a
  * project. Falls back to the git top-level, or to `cwd` outside git. This is where config, checks and receipts live.
  */
-export function findRoot(cwd: string): string {
+export function findRoot(cwd: string, knownTop?: string | null): string {
   let start = resolve(cwd);
   try {
     start = realpathSync.native(start);
   } catch {
     // keep the resolved path
   }
-  const top = gitTopLevel(start);
+  const top = knownTop !== undefined ? knownTop : gitTopLevel(start);
   let dir = start;
   for (;;) {
     if (hasProjectMarker(dir)) return dir;

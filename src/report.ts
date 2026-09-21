@@ -137,6 +137,8 @@ export interface OtherSessionNote {
   /** Files both sessions edited. */
   shared: { path: string; ago: string }[];
   lastActive: string | null;
+  /** Nothing in the failing output names a file this session edited: it is told once and released after the next run. */
+  soft: boolean;
 }
 
 const MAX_NOTE_FILES = 10;
@@ -147,7 +149,7 @@ function otherSessionLines(note: OtherSessionNote): string[] {
     for (const x of xs.slice(0, MAX_NOTE_FILES)) lines.push(`  ${x.path}  (edited ${x.ago})`);
     if (xs.length > MAX_NOTE_FILES) lines.push(`  ... ${xs.length - MAX_NOTE_FILES} more`);
   };
-  lines.push(`ANOTHER AGENT SESSION IS WORKING IN THIS SAME DIRECTORY${note.lastActive ? ` (last active ${note.lastActive})` : ''}. The checks see its unfinished work too.`);
+  lines.push(`ANOTHER AGENT SESSION HAS BEEN WORKING IN THIS SAME DIRECTORY WHILE YOU WERE${note.lastActive ? ` (its last hook activity: ${note.lastActive})` : ''}. The checks see its unfinished work too.`);
   if (note.foreign.length > 0) {
     lines.push('These uncommitted files are its work in progress, not yours:');
     list(note.foreign);
@@ -199,8 +201,10 @@ export function formatBlockReason(res: VerifyResult, attempt: number, maxAttempt
   }
   if (onlyIntegrity) {
     lines.push('Restore the removed or weakened tests (or explain to the user why the change to the tests is correct), then run `npx isitdone` before claiming completion.');
+  } else if (otherSession && otherSession.soft) {
+    lines.push('Nothing in this output names a file you edited, so first work out whether your change caused it (a changed type, signature or fixture can break a file you never opened). If it did, fix YOUR change, in your own files. If it did not, tell the user exactly that and stop: isitdone will run the checks once more and let you stop if the output still names none of your files. Do not skip, delete or weaken tests to make this pass.');
   } else if (otherSession && otherSession.foreign.length > 0) {
-    lines.push('Fix only the failures your own changes caused. If what is left comes from the other session\'s files, tell the user exactly that and stop: isitdone does not hold you to failures in files you did not touch. Do not skip, delete or weaken tests to make this pass.');
+    lines.push('Fix the failures in your own files, then run `npx isitdone`. Failures that remain in the other session\'s files are not yours to fix: leave them and tell the user. Do not skip, delete or weaken tests to make this pass.');
   } else {
     lines.push('Fix the failures, then run `npx isitdone` and paste its output before claiming completion. Do not skip, delete or weaken tests to make this pass; if a check is wrong for this repo, say so explicitly to the user.');
   }

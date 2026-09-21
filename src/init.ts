@@ -51,7 +51,7 @@ export const DEFAULT_HOOK_TIMEOUT_S = 600;
 /** The edit hook only scans a diff; it must stay fast. */
 export const EDIT_HOOK_TIMEOUT_S = 30;
 /** Startup margin for npx resolution and git hashing, in seconds. */
-const HOOK_MARGIN_S = 60;
+export const HOOK_MARGIN_S = 60;
 export const PACKAGE_NAME = '@aivolution/isitdone';
 
 export function defaultCommand(host: HostAdapter): string {

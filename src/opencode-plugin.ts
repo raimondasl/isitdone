@@ -104,6 +104,8 @@ const describe = (e) => (e && e.message ? e.message : String(e));
 const synthetic = (m) => { const t = (m.parts || []).filter((p) => p && p.type === "text"); return t.length > 0 && t.every((p) => p.synthetic); };
 // One check per session at a time: a second idle while the checks run would grade a stale turn or inject twice.
 const inflight = new Set();
+// Subagent session id -> the top-level session it works for.
+const owners = new Map();
 
 export const IsItDone = async ({ client, directory, worktree }) => {
   const root = worktree && worktree !== "/" ? worktree : directory || process.cwd(); // OpenCode reports "/" outside version control
@@ -111,6 +113,22 @@ export const IsItDone = async ({ client, directory, worktree }) => {
     try {
       await client.app.log({ body: { service: "isitdone", level, message } });
     } catch {}
+  };
+  // Only top-level sessions are graded, so a subagent's edits are recorded under the session it works for; recorded
+  // under its own id they would look like another session's files to its parent.
+  const ownerOf = async (id) => {
+    if (!id) return id;
+    if (owners.has(id)) return owners.get(id);
+    let owner = id;
+    try {
+      for (let i = 0; i < 8; i++) {
+        const s = (await client.session.get({ path: { id: owner } })).data;
+        if (!s || !s.parentID) break;
+        owner = s.parentID;
+      }
+    } catch {}
+    owners.set(id, owner);
+    return owner;
   };
   const hooks = {
     event: async ({ event }) => {
@@ -175,7 +193,7 @@ export const IsItDone = async ({ client, directory, worktree }) => {
     hooks["tool.execute.after"] = async (input, output) => {
       if (!input || EDIT_TOOLS.indexOf(input.tool) < 0) return;
       try {
-        const payload = { hook_event_name: "tool.execute.after", session_id: input.sessionID, cwd: directory, worktree, tool_name: input.tool, tool_input: input.args || {} };
+        const payload = { hook_event_name: "tool.execute.after", session_id: await ownerOf(input.sessionID), cwd: directory, worktree, tool_name: input.tool, tool_input: input.args || {} };
         const out = await run(EDIT_COMMAND, payload, root, EDIT_TIMEOUT_MS);
         const note = out && out.hookSpecificOutput && typeof out.hookSpecificOutput.additionalContext === "string" ? out.hookSpecificOutput.additionalContext : "";
         if (note && output && typeof output.output === "string") output.output += "\\n\\n" + note;

@@ -241,18 +241,22 @@ Details that matter in practice: one verification runs at a time per repository,
 
 ## Two sessions in one working tree
 
-The checks see the whole working tree. When two agent sessions work in the same directory, that tree holds the other session's unfinished files too, and a gate that ignores this blames whichever session stops first and tells it to "fix" work that is not its own. `isitdone` keeps the two apart:
+The checks see the whole working tree. When two agent sessions work in the same directory, that tree holds the other session's unfinished files too, and a gate that ignores this blames whichever session stops first and tells it to "fix" work that is not its own. `isitdone` keeps the two apart, under one rule: **a session on its own is gated exactly as before.** Anything softer needs proof that another session is at work.
 
-- The post-edit hook records which session edited which file (`.isitdone/sessions/`: paths and timestamps, local, never committed).
-- A failure whose output names only files that **another session active in the last 30 minutes** has uncommitted edits in does not block this session. The user is told why, and the receipt still says FAIL, because the tree is not verified.
-- When the output names this session's files, the stop is blocked as usual, and the reason starts with the other session's files and a plain instruction: do not edit, revert or "fix" them, and do not run git commands that would discard them (`checkout`, `restore`, `reset`, `stash`, `clean`).
-- When the output names nobody's files (a bare `3 failed`), the session is blocked once instead of three times.
-- Test-integrity findings in the other session's files are not reported as this session's doing and do not block it in strict mode.
-- Check runs are serialised per project: a second session's stop waits (up to three minutes) for the first session's run instead of running the suite on top of it, and reuses its PASS receipt when the tree has not changed since.
+- The post-edit hook records which session edited which file (`.isitdone/sessions/` at the repository top: paths and timestamps, local, never committed).
+- **Proof of a concurrent session** is hook activity of another session *after this session's first*, within the last two hours, plus uncommitted files it recorded. A conversation that ended before this one began (`/clear`, a restart, yesterday's session) is not "another session": its leftovers are simply the state of the tree.
+- With that proof, every block reason starts with the other session's files and a plain instruction: do not edit, revert or "fix" them, and do not run git commands that would discard them (`checkout`, `restore`, `reset`, `stash`, `clean`).
+- A failure whose output names a file this session edited blocks as usual, up to `maxAttempts`.
+- A failure whose output names none of this session's files blocks **once**. The agent is asked to work out whether its change caused it (a changed type or fixture breaks files it never opened) and to fix its own change if so; at its next stop the checks run again, and if the output still names none of its files it may stop. The user is told, and the receipt says FAIL, because the tree is not verified. Nothing is ever released without the checks having run on that stop.
+- A session with no edit records at all (a host without a post-edit hook, or edits made only through the shell) gets the instruction but no leniency: without evidence of what it touched, it is gated as if it were alone.
+- Test-integrity findings in the other session's files are left to that session, and the stop message says how many were.
+- Check runs are serialised per project: a stop waits (up to three minutes, less when the checks themselves need most of the hook's time limit) for a run in progress instead of running the suite on top of it, then reuses its PASS receipt when the tree has not changed. A cached PASS never waits.
 
-Only positive evidence counts. A dirty file that no session recorded (your own edit, a formatter, a shell command) belongs to nobody and is treated as before, and a session that went quiet more than 30 minutes ago no longer owns its leftovers. The records come from the post-edit hook, so this works on Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode; a session on a host without that hook records nothing, but still respects the files other sessions recorded. `"otherSessions": "ignore"` turns all of it off.
+What "names a file" means: the repo-relative path, an absolute path, or the shorter path a check prints when it runs from a sub-directory or a workspace, provided only one file in the repository ends that way; a bare `Name.java:17` counts only for a distinctive name that is unique in the repository. Colour codes are stripped first, and on Windows and macOS the comparison ignores case.
 
-This makes sharing a directory safe, not ideal: a whole-repo check still cannot pass while the other session's half of the tree is broken. For long parallel work, give each session its own [git worktree](https://git-scm.com/docs/git-worktree); each gets its own `.isitdone/` and its own receipt.
+Limits worth knowing. The records come from the post-edit hook, so ownership is known on Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode (where a subagent's edits count as its parent's); files changed through shell commands are nobody's. Attribution follows where a failure is *reported*, not what caused it: if this session's change breaks the other session's file, the single block and its question are the only safeguard, and the other session will be held to a failure in its own file. The release message is shown on Claude Code, Codex, Gemini CLI and Qwen Code; Devin and OpenCode have no channel for one and release silently after the one block. `"otherSessions": "ignore"` switches off the instruction, the single block and the run lock.
+
+Sharing a directory this way is workable, not ideal: a whole-repo check cannot pass while the other session's half of the tree is broken. For long parallel work, give each session its own [git worktree](https://git-scm.com/docs/git-worktree); each gets its own `.isitdone/` and its own receipt.
 
 ## CLI
 
