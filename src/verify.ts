@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { IsitdoneConfig } from './config.js';
 import { detectChecks, type Check, type Detection } from './detect.js';
 import { collectDiff, readAtBase, readNow } from './diff.js';
-import { gitInfo, type GitInfo } from './git.js';
+import { existingPathsChanged, gitInfo, type GitInfo } from './git.js';
 import { scanIntegrity, type IntegrityReport } from './integrity.js';
 import { configHash, evaluateReceipt, writeReceipt, type Receipt, type ReceiptEvaluation } from './receipt.js';
 import { childEnv, runCheck, type RunResult } from './run.js';
@@ -148,14 +148,14 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const lock = waitMs > 0 ? await acquireRunLock(root, waitMs, opts.onLockWait) : null;
   const lockInfo = lock ? { waitedMs: lock.waitedMs, held: lock.held, tookOver: lock.tookOver } : undefined;
   try {
-    if (lock && lock.waitedMs > 1000 && (opts.useCache ?? true)) {
-      // Time passed: the run we waited for may have proved this exact tree. Its PASS counts only if it STARTED on this
-      // tree: a receipt is bound to the tree after the run, and our own last edits may have landed while that run was
-      // already reading the files.
+    if (lock && lock.waitedMs > 1000) {
+      // Time passed: the tree may have moved on, and the run we waited for may have proved this exact tree. Its PASS
+      // counts only if it STARTED on this tree: a receipt is bound to the tree after the run, and our own last edits
+      // may have landed while that run was already reading the files.
       git = gitInfo(root);
       const again = evaluateReceipt(root, git, ch);
       base = { ...base, git, before: again };
-      if (receiptSatisfies(again, opts.profile) && again.receipt?.treeBefore === git.tree) {
+      if ((opts.useCache ?? true) && receiptSatisfies(again, opts.profile) && again.receipt?.treeBefore === git.tree) {
         return { ...base, ok: true, ran: [], skipped: [], receipt: again.receipt, cached: true, durationMs: Date.now() - started, lock: lockInfo };
       }
     }
@@ -197,10 +197,11 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       // Checks may write files (coverage, build output). Bind the receipt to the tree as it is now,
       // and remember the pre-run tree so either matches on the next stop.
       let after = git.isRepo ? gitInfo(root) : git;
-      // ...unless a session edited files while the checks ran: then the difference is not just the checks' own output,
+      // ...unless files were edited while the checks ran (a session recorded an edit, or a path that already existed
+      // was modified or deleted, which checks rarely do): then the difference is not just the checks' own output,
       // nothing proves the tree as it is now, and the receipt stands for the tree the run started on.
-      if (after.tree !== git.tree && editsSince([git.root, root], runStarted)) {
-        warnings.push('files were edited while the checks ran; the receipt covers the tree the run started on, not the current one');
+      if (after.tree !== git.tree && (editsSince([git.root, root], runStarted) || existingPathsChanged(git.root, git.tree, after.tree))) {
+        warnings.push('files changed while the checks ran; the receipt covers the tree the run started on, not the current one');
         after = git;
       }
       try {
@@ -211,6 +212,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
           branch: after.branch,
           tree: after.tree,
           treeBefore: git.tree,
+          startedAt: new Date(runStarted).toISOString(),
           dirtyFiles: after.dirtyFiles,
           configHash: ch,
           checks: ran,

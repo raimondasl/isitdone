@@ -60,6 +60,22 @@ export function recordEdits(top: string, host: string, sessionId: string | null,
   }
 }
 
+/**
+ * Remember that a stop of this session proved the tree (all checks, full profile) at `at`. It goes next to the edit
+ * records at the git top-level, because the session's state file lives under its project root, which another session
+ * in another sub-project never reads.
+ */
+export function recordPass(top: string, host: string, sessionId: string | null, at: number): void {
+  if (sessionId === null) return;
+  try {
+    ensureStateDir(top);
+    mkdirSync(sessionsDir(top), { recursive: true });
+    appendFileSync(join(sessionsDir(top), sessionKey(host, sessionId) + EDITS_EXT), JSON.stringify({ t: at, pass: true }) + '\n');
+  } catch {
+    // without the marker the session's files stay "in progress" for the window: the cautious side
+  }
+}
+
 export interface SessionEdits {
   key: string;
   /** Earliest and latest sign of life: edit records and the state file's firstSeen / updatedAt. */
@@ -106,7 +122,12 @@ export function readSessions(bases: string[]): SessionEdits[] {
         for (const line of text.split('\n')) {
           if (line === '') continue;
           try {
-            const rec = JSON.parse(line) as { t?: unknown; p?: unknown };
+            const rec = JSON.parse(line) as { t?: unknown; p?: unknown; pass?: unknown };
+            if (typeof rec.t === 'number' && rec.pass === true) {
+              if (rec.t > s.lastPassAt) s.lastPassAt = rec.t;
+              seen(s, rec.t);
+              continue;
+            }
             if (typeof rec.t !== 'number' || typeof rec.p !== 'string') continue;
             if ((s.files.get(rec.p) ?? 0) < rec.t) s.files.set(rec.p, rec.t);
             seen(s, rec.t);
@@ -146,6 +167,17 @@ export function pruneSessions(base: string, now = Date.now()): void {
   }
 }
 
+/** When this session last recorded an edit (0: never, or no records). */
+export function lastEditAt(bases: string[], host: string, sessionId: string | null): number {
+  if (sessionId === null) return 0;
+  try {
+    const me = readSessions(bases).find((s) => s.key === sessionKey(host, sessionId));
+    return me ? Math.max(0, ...me.files.values()) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** Did any session record an edit at or after `since`? (A check run that overlapped someone's edits proves less than it seems.) */
 export function editsSince(bases: string[], since: number): boolean {
   try {
@@ -163,9 +195,11 @@ export function compactEdits(top: string, host: string, sessionId: string | null
     if (statSync(file).size < COMPACT_ABOVE_BYTES) return;
     const me = readSessions([top]).find((s) => s.key === sessionKey(host, sessionId));
     if (!me) return;
+    if (me.files.size === 0) return;
     const lines = [...me.files].map(([p, t]) => JSON.stringify({ t, p }) + '\n');
     // The first record carries the session's start: concurrency is judged against it.
-    lines.unshift(JSON.stringify({ t: me.firstSeen, p: [...me.files.keys()][0] ?? '' }) + '\n');
+    lines.unshift(JSON.stringify({ t: me.firstSeen, p: [...me.files.keys()][0] }) + '\n');
+    if (me.lastPassAt > 0) lines.push(JSON.stringify({ t: me.lastPassAt, pass: true }) + '\n');
     writeFileAtomic(file, lines.join(''));
   } catch {
     // leave it as it is
@@ -272,6 +306,10 @@ export interface MentionContext {
   fold: boolean;
 }
 
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\export function mentionContext(');
+}
+
 export function mentionContext(output: string, top: string, repoPaths: Iterable<string>, fold = process.platform === 'win32' || process.platform === 'darwin'): MentionContext {
   const norm = (s: string) => (fold ? s.toLowerCase() : s);
   const byBase = new Map<string, string[]>();
@@ -284,7 +322,8 @@ export function mentionContext(output: string, top: string, repoPaths: Iterable<
     else byBase.set(name, [q]);
   }
   const topNorm = norm(top.replace(/\\/g, '/').replace(/\/$/, ''));
-  const text = norm(stripAnsi(output).replace(/\\/g, '/')).split(`${topNorm}/`).join(ANCHOR);
+  const plain = norm(stripAnsi(output).replace(/\\/g, '/'));
+  const text = topNorm === '' ? plain : plain.replace(new RegExp(`(?<![A-Za-z0-9_.-])${escapeRe(topNorm)}/`, 'g'), ANCHOR);
   return { text, top: topNorm, byBase, fold };
 }
 
@@ -323,18 +362,19 @@ export function mentions(ctx: MentionContext, file: string): boolean {
   let looked = 0;
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     // A name that occurs thousands of times without once resolving is log noise, not a finding; stay linear.
-    if (++looked > MAX_HITS) return false;
     const end = i + name.length;
     const next = text[end];
     if (next !== undefined && /[A-Za-z0-9_-]/.test(next)) continue;
     if (next === '.' && /[A-Za-z0-9]/.test(text[end + 1] ?? '')) continue; // a.ts.map, a.test.ts.snap
+    if (i > 0 && /[A-Za-z0-9_.-]/.test(text[i - 1] as string)) continue; // "test_api.py" is not "api.py"
+    if (++looked > MAX_HITS) return false;
     // The whole repo-relative path, spaces and brackets included, with nothing path-like glued to its left.
     const whole = end - path.length;
-    if (whole >= 0 && text.startsWith(path, whole) && (whole === 0 || text[whole - 1] === ANCHOR || !/[A-Za-z0-9_.\/-]/.test(text[whole - 1] as string))) return true;
+    const anchored = whole > 0 && text[whole - 1] === ANCHOR;
+    if (whole >= 0 && text.startsWith(path, whole) && (anchored || (path.includes('/') && (whole === 0 || !/[A-Za-z0-9_.\/-]/.test(text[whole - 1] as string))))) return true;
     let start = i;
     while (start > 0 && i - start < MAX_TOKEN && PATH_CHAR.test(text[start - 1] as string)) start--;
     const token = text.slice(start, end);
-    if (token.length > name.length && /[A-Za-z0-9_.-]/.test(token[token.length - name.length - 1] as string)) continue; // "myfoo.ts"
     if (resolves(token, end)) return true;
     // Glued text: "at fn (src/a.js:5:11)", "finds(FooTest.java:17)", "[src/a.js]", "error:src/a.js". A path that really
     // contains brackets (app/(group)/page.tsx) resolved as a whole above.

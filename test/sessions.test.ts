@@ -192,6 +192,24 @@ describe('mentions', () => {
     expect(named('    handler_test.go:23: boom\nFAIL example.com/app/pkg/users', 'pkg/orders/handler_test.go')).toBe(false);
     expect(named('    utils.py:3: in helper', 'src/pkg/utils.py')).toBe(false);
     expect(named('see scanner_test.go for details', 'internal/scan/scanner_test.go')).toBe(false);
+    // a root-level generic name keeps its guards: tests/conftest.py exists too, so a bare "conftest.py:12" names neither
+    expect(named('conftest.py:12: in fixture', 'conftest.py')).toBe(false);
+  });
+
+  it('anchors the top-level only where a path starts: a repository at /app with a src/app directory', () => {
+    const paths = ['src/app/page.tsx', 'app/models/user.rb', 'src/a.ts'];
+    const at = (output: string, file: string, top: string) => mentions(mentionContext(output, top, paths, false), file);
+    expect(at('/app/src/app/page.tsx(7,3): error TS2322', 'src/app/page.tsx', '/app')).toBe(true);
+    expect(at('src/app/page.tsx(7,3): error TS2322', 'src/app/page.tsx', '/app')).toBe(true);
+    expect(at('./app/models/user.rb:12', 'app/models/user.rb', '/app')).toBe(true);
+    expect(at('(/app/src/app/page.tsx:3:1)', 'src/app/page.tsx', '/app')).toBe(true);
+    expect(at('/backup/app/src/a.ts:1', 'src/a.ts', '/app')).toBe(false);
+    expect(at('src/a.ts(1,1): error', 'src/a.ts', '/')).toBe(true);
+  });
+
+  it('does not let thousands of look-alike names crowd out the real mention at the end of a verbose log', () => {
+    const listing = Array.from({ length: 3000 }, (_, i) => `tests/test_scan.py::test_case[${i}] PASSED`).join('\n');
+    expect(named(`${listing}\nsrc/reporadar/scan.py:41: AssertionError`, 'src/reporadar/scan.py')).toBe(true);
   });
 });
 
@@ -220,6 +238,42 @@ describe('Stop hook with another session in the same working tree', () => {
       expect(reasonOf(o.stdout)).toMatch(new RegExp(`attempt ${n}/3`));
       expect(reasonOf(o.stdout)).not.toMatch(/ANOTHER AGENT SESSION/);
     }
+  });
+
+  it('sees that a helper passed even when it worked in another sub-project (its state file lives under that root)', async () => {
+    repo = twoFileRepo({ 'packages/y/package.json': nodePkg({ test: PASS }), 'packages/y/h.js': 'ok\n' });
+    const sub = join(repo.root, 'packages', 'y');
+    edit(repo, 's1', 'src/a.js', 'fine\n');
+    edit(repo, 'helper', 'packages/y/h.js', 'helped\n', sub);
+    expect((await runHook({ host: 'claude', stdin: stop(sub, 'helper') })).decision).toBe('allow');
+    repo.write('src/b.js', 'BROKEN\n');
+    const o = await runHook({ host: 'claude', stdin: stop(repo.root, 's1') });
+    expect(reasonOf(o.stdout)).toMatch(/attempt 1\/3/);
+    expect(reasonOf(o.stdout)).not.toMatch(/ANOTHER AGENT SESSION/);
+  });
+
+  it('a pause is not a pass: a session that stopped to ask a question, with tests never run, still has work in progress', async () => {
+    repo = twoFileRepo();
+    edit(repo, 's1', 'src/a.js', 'fine\n');
+    edit(repo, 's2', 'src/b.js', 'BROKEN\n');
+    const pause = await runHook({ host: 'claude', stdin: stop(repo.root, 's2', { last_assistant_message: 'I changed the parser. Should I also update the tokenizer?' }) });
+    expect(pause.decision).toBe('allow'); // no completion claim: only lite checks, and this repository has none
+    const o = await runHook({ host: 'claude', stdin: stop(repo.root, 's1') });
+    expect(reasonOf(o.stdout)).toMatch(/ANOTHER AGENT SESSION/);
+    expect(reasonOf(o.stdout)).toMatch(/not yours:\n {2}src\/b\.js/);
+  });
+
+  it('does not take a cached PASS from a run that began before this session\'s latest edit', async () => {
+    repo = twoFileRepo();
+    edit(repo, 's1', 'src/a.js', 'fine\n');
+    expect((await runHook({ host: 'claude', stdin: stop(repo.root, 's1') })).why).toMatch(/all checks passed/);
+    // the same session again, nothing edited since its run began: the receipt stands
+    expect((await runHook({ host: 'claude', stdin: stop(repo.root, 's1') })).why).toMatch(/cached PASS/);
+    // another session's edit landed while that run was under way (same tree now as the receipt's): it must run itself
+    recordEdits(repo.root, 'claude', 's2', ['src/b.js']);
+    const o = await runHook({ host: 'claude', stdin: stop(repo.root, 's2') });
+    expect(o.why).toMatch(/all checks passed/);
+    expect(o.result?.cached).toBe(false);
   });
 
   it('a failure that names only the other session\'s files: told once, checks run again, then released with the receipt at FAIL', async () => {
@@ -394,9 +448,33 @@ describe('a check run that overlapped someone\'s edits', () => {
       expect(b.lock?.waitedMs ?? 0).toBeGreaterThan(1000);
       expect(b.cached).toBe(false); // the first run's PASS says nothing about the edited tree
       expect(b.ran).toHaveLength(1);
-      if (recorded) expect(a.warnings.join(' ')).toMatch(/files were edited while the checks ran/);
+      if (recorded) expect(a.warnings.join(' ')).toMatch(/files changed while the checks ran/);
     }, 60_000);
   }
+});
+
+describe('a receipt never covers a tracked file that changed while the checks ran', () => {
+  it('binds to the tree the run started on when an existing file was modified during the run, recorded or not', async () => {
+    const SOMEONE_EDITS = 'node -e "require(\'fs\').writeFileSync(\'src/a.js\', \'changed while the checks ran\')"';
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: SOMEONE_EDITS }), 'src/a.js': 'ok\n' } });
+    const first = await verify({ root: repo.root, config: {}, profile: 'full' });
+    expect(first.ok).toBe(true);
+    expect(first.warnings.join(' ')).toMatch(/files changed while the checks ran/);
+    expect(first.receipt?.tree).toBe(first.receipt?.treeBefore);
+    // so the tree as it is now has no receipt, and the next run is a real one (after which nothing changes any more)
+    const second = await verify({ root: repo.root, config: {}, profile: 'full' });
+    expect(second.cached).toBe(false);
+    expect((await verify({ root: repo.root, config: {}, profile: 'full' })).cached).toBe(true);
+  });
+
+  it('still binds to the tree after the run when the checks only added files', async () => {
+    const WRITES_REPORT = 'node -e "require(\'fs\').writeFileSync(\'report.txt\', \'coverage 100%\')"';
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: WRITES_REPORT }), 'src/a.js': 'ok\n' } });
+    const first = await verify({ root: repo.root, config: {}, profile: 'full' });
+    expect(first.warnings).toEqual([]);
+    expect(first.receipt?.tree).not.toBe(first.receipt?.treeBefore);
+    expect((await verify({ root: repo.root, config: {}, profile: 'full' })).cached).toBe(true);
+  });
 });
 
 describe('run lock', () => {

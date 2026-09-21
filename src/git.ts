@@ -150,6 +150,20 @@ export function dirtyPathSet(top: string): Set<string> {
   return paths;
 }
 
+/**
+ * Between two working-tree hashes, was a path that already existed modified or deleted? Checks add files (coverage,
+ * build output); they rarely rewrite existing ones, so this is the sign of an edit made while the checks ran. False
+ * when it cannot be told (a hash that is not a git tree: no repository, submodules folded in).
+ */
+export function existingPathsChanged(top: string, before: string, after: string): boolean {
+  if (!/^[0-9a-f]{40,64}$/.test(before) || !/^[0-9a-f]{40,64}$/.test(after) || before === after) return false;
+  const r = git(['diff-tree', '-r', '--name-status', '--no-renames', '-z', before, after], top);
+  if (!r.ok) return false;
+  const parts = r.stdout.split('\0');
+  for (let i = 0; i + 1 < parts.length; i += 2) if (parts[i] === 'M' || parts[i] === 'D') return true;
+  return false;
+}
+
 /** Every tracked path, relative to the top-level (for telling which file a bare or partial path in check output means). */
 export function trackedPaths(top: string): string[] {
   const r = git(['ls-files', '-z'], top);

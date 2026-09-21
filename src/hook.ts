@@ -11,7 +11,7 @@ import { getHost, type HookInput, type HostAdapter, type HostName } from './host
 import { DEFAULT_HOOK_TIMEOUT_S, HOOK_MARGIN_S } from './init.js';
 import { ensureStateDir } from './receipt.js';
 import { formatBlockReason, integrityBlocks, type OtherSessionNote } from './report.js';
-import { attribute, compactEdits, formatAgo, LOCK_WAIT_MS, mentionContext, mentions, pruneSessions, recordEdits, sessionKey, SESSIONS_DIR, type Attribution } from './sessions.js';
+import { attribute, compactEdits, formatAgo, lastEditAt, LOCK_WAIT_MS, mentionContext, mentions, pruneSessions, recordEdits, recordPass, sessionKey, SESSIONS_DIR, type Attribution } from './sessions.js';
 import { budgetSeconds, verify, type ResolvedProfile, type VerifyResult } from './verify.js';
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -240,13 +240,13 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   // (verify takes the lock after its cache check). The wait fits inside the hook timeout that init registered, which
   // is sized from the same budget.
   const output = new Map<string, string>();
-  const result = await verify({
+  const runVerify = (useCache: boolean) => verify({
     root,
     config,
     profile,
     claim,
     host: RECEIPT_HOST[host.name] ?? host.name,
-    useCache: !doctor,
+    useCache,
     dryRun: doctor,
     // A lite failure in the other session's file must not hide this session's own failing tests.
     all: before !== null,
@@ -260,6 +260,19 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
           },
     onOutput: doctor ? undefined : (check, chunk) => output.set(check.id, ((output.get(check.id) ?? '') + chunk).slice(-MAX_ATTRIBUTION_CHARS)),
   });
+  let result = await runVerify(!doctor);
+  if (result.cached && result.receipt && top !== null) {
+    // A receipt is bound to the tree after its run. When that run was another session's, this session's last edit may
+    // have landed while the checks were already reading the files: a PASS from before this session's latest recorded
+    // edit proves nothing about it, so the checks run again.
+    const r = result.receipt;
+    const ranFrom = r.startedAt ? Date.parse(r.startedAt) : Date.parse(r.createdAt) - r.checks.reduce((n, c) => n + c.durationMs, 0) - 1000;
+    if (lastEditAt([top, root], host.name, input.sessionId) >= ranFrom) result = await runVerify(false);
+  }
+  // "Passed" for other sessions' purposes means the whole tree was proved: a pause that ran only lite checks, or
+  // nothing, leaves this session's files as unfinished as they were. Stamped with the start of the run, so an edit
+  // recorded while the checks ran does not count as covered.
+  const provedAt = result.ok && result.receipt?.status === 'PASS' && result.receipt.profile === 'full' ? Date.now() - result.durationMs : null;
   const firstSeen = prev?.firstSeen ?? new Date().toISOString();
   const state = (n: number, softBlocks = 0, passed = false): SessionState => ({
     host: host.name,
@@ -270,7 +283,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     lastTree: result.git.tree,
     softBlocks,
     firstSeen,
-    lastPassAt: passed ? new Date().toISOString() : prev?.lastPassAt,
+    lastPassAt: passed && provedAt !== null ? new Date(provedAt).toISOString() : prev?.lastPassAt,
     updatedAt: new Date().toISOString(),
   });
   if (top !== null) {
@@ -300,6 +313,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
 
   if (view.ok && !integrityBlocks(view)) {
     if (!doctor) writeState(root, state(0, 0, true));
+    if (!doctor && top !== null && provedAt !== null) recordPass(top, host.name, input.sessionId, provedAt);
     return allow(`${view.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, view, 0);
   }
 

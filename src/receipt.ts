@@ -23,6 +23,8 @@ export interface Receipt {
   tree: string;
   /** Working-tree hash before the checks ran (checks may write files). */
   treeBefore?: string;
+  /** When the first check started. An edit made after this moment was not necessarily seen by the run. */
+  startedAt?: string;
   dirtyFiles: number;
   configHash: string;
   checks: RunResult[];
