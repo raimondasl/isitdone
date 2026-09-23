@@ -4,6 +4,12 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-23
+
+### Added
+
+- `doctor` (and therefore `init`) now runs the detected checks once on the current tree, as a dry run (no receipt, no state), and reports every check that already fails or times out, with where the command was detected from (`package.json`, `pyproject.toml`, a workflow file, ...) and the `.isitdone.json` line that overrides it. A misdetected command (`mypy .` where CI runs `mypy src/pkg`, the 0.5.1 bug) or a red tree therefore shows up at install time, with `init` exiting 1 and ATTENTION, instead of as NOT DONE on every stop. A valid PASS receipt for the tree makes it instant; `--no-baseline` skips it. Progress is shown per check on a terminal.
+
 ## [0.6.1] - 2026-09-21
 
 0.6.0 weakened the gate for ordinary single-session use; update with `npx isitdone update`. An adversarial review of 0.6.0 (four reviewers, each finding reproduced by a second agent) confirmed 19 of its 20 findings (several overlapping). This release is the redesign that answers them; a second round of three verifiers re-ran the reproductions against it and found three more serious problems, which are fixed here as well.

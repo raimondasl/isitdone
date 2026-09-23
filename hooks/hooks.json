@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @aivolution/isitdone@0.6.1 hook --host claude",
+            "command": "npx -y @aivolution/isitdone@0.7.0 hook --host claude",
             "timeout": 600
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @aivolution/isitdone@0.6.1 hook --host claude --event edit",
+            "command": "npx -y @aivolution/isitdone@0.7.0 hook --host claude --event edit",
             "timeout": 30
           }
         ]

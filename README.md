@@ -110,7 +110,7 @@ One command per host. Run it inside the repository.
 | Junie CLI (early access) | `npx isitdone init --agent junie --user` | `~/.junie/config.json` (Stop) |
 | Everything | `npx isitdone init --agent all` | all of the above that apply to the repo |
 
-`init` detects the checks, writes the Stop hook and (for Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode) a warn-only post-edit hook, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks:
+`init` detects the checks, writes the Stop hook and (for Claude Code, Codex, Gemini CLI, Qwen Code, Devin and OpenCode) a warn-only post-edit hook, adds `.isitdone/` to `.gitignore`, and runs `doctor`, which pipes a synthetic "all tests pass" stop event through the hook and proves it blocks, and runs the detected checks once on the current tree so that a wrong guess (say `mypy .` where CI runs `mypy src/pkg`) or an already-red tree shows up now, at install time, instead of as NOT DONE on every stop:
 
 ```
 $ npx isitdone init
@@ -124,6 +124,7 @@ isitdone doctor  ~/work/demo-app
   ok  git            main@2429c82, 0 dirty file(s), tree 8d11d2f
   ok  config         no .isitdone.json (auto-detect only)
   ok  checks         typecheck: npm run typecheck [lite, 60s]; lint: npm run lint [lite, 60s]; test: npm test [full, 120s]
+  ok  baseline       all 3 checks pass on the current tree (npm run typecheck 428ms, npm run lint 411ms, npm test 532ms)
   ok  hook:claude    Claude Code (project) .claude/settings.json -> npx -y @aivolution/isitdone hook --host claude
   ok  probe:claude   synthetic "tests pass" stop was blocked in 1.9s (decision block with reason)
 
@@ -278,7 +279,7 @@ npx isitdone receipt [--md|--json] state of the current tree: PASS | FAIL | STAL
 npx isitdone detect [--json]      which checks would run and where they came from
 npx isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor | gemini | copilot | qwen | goose | droid |
                                   devin | augment | opencode | junie | all | auto)
-npx isitdone doctor               prove the installed hook blocks; show detected checks and host notes
+npx isitdone doctor               prove the installed hook blocks; run the checks once on the current tree (--no-baseline skips)
 npx isitdone uninstall            remove the hook(s)
 npx isitdone mcp                  MCP server on stdio for agents without a stop hook (started by the IDE, see "MCP server")
 ```

@@ -120,6 +120,7 @@ describe('cli end-to-end', () => {
     expect(report.ok).toBe(true);
     expect(report.checks.find((c: { name: string }) => c.name === 'probe:claude').detail).toMatch(/hook runs isitdone 0\.0\.0-test/);
     expect(report.checks.some((c: { name: string }) => c.name === 'hook:claude')).toBe(true);
+    expect(report.checks.find((c: { name: string }) => c.name === 'baseline').detail).toMatch(/all 1 check passes? on the current tree|all 1 check pass on the current tree/);
 
     const u = cli(['uninstall', '--agent', 'claude,codex'], repo.root);
     expect(u.code).toBe(0);
@@ -165,6 +166,29 @@ describe('cli end-to-end', () => {
     const augment = cli(['hook', '--host', 'augment'], repo.root, JSON.stringify({ hook_event_name: 'Stop', conversation_id: 'c', workspace_roots: [repo.root], agent_stop_cause: 'end_turn' }));
     expect(augment.code).toBe(0);
     expect(augment.stdout.trim()).toBe(''); // tests pass: allow
+  });
+
+  it('doctor and init catch a check that already fails on the untouched tree, and say where the command came from', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL, lint: PASS }) } });
+    const d = cli(['doctor', '--json', '--no-latest', '--no-probe'], repo.root);
+    expect(d.code).toBe(1);
+    const report = JSON.parse(d.stdout);
+    const base = report.checks.find((c: { name: string }) => c.name === 'baseline:test');
+    expect(base.ok).toBe(false);
+    expect(base.detail).toMatch(/npm test FAILS on the current tree before any agent edit [(]detected from package[.]json[)]: exit 1: 1 failed, 2 passed/);
+    expect(base.hint).toMatch(/NOT DONE on every stop/);
+    expect(base.hint).toMatch(/"checks": [{]"test": "<command>"[}]/);
+    expect(report.checks.some((c: { name: string }) => c.name === 'baseline:lint')).toBe(false); // lint passed
+    // a dry run: nothing written
+    expect(existsSync(join(repo.root, '.isitdone', 'receipt.json'))).toBe(false);
+    // --no-baseline skips it
+    const skipped = JSON.parse(cli(['doctor', '--json', '--no-latest', '--no-probe', '--no-baseline'], repo.root).stdout);
+    expect(skipped.checks.some((c: { name: string }) => c.name.startsWith('baseline'))).toBe(false);
+    // init runs doctor, so a misdetected or red check is visible at install time
+    const r = cli(['init', '--agent', 'claude', '--command', LOCAL_HOOK('claude'), '--no-latest', '--no-probe'], repo.root);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/baseline:test/);
+    expect(r.stdout).toMatch(/ATTENTION/);
   });
 
   it('doctor flags a repo with no hook and no checks', () => {

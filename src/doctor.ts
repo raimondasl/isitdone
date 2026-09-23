@@ -1,14 +1,16 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { detectChecks } from './detect.js';
-import { loadConfig } from './config.js';
+import { detectChecks, type Check } from './detect.js';
+import { loadConfig, type IsitdoneConfig } from './config.js';
 import { gitInfo } from './git.js';
 import { installedHooks } from './init.js';
 import { HOST_NAMES, type HostAdapter } from './hosts.js';
-import { childEnv, killTree } from './run.js';
+import { formatDuration } from './output.js';
+import { childEnv, killTree, type RunResult } from './run.js';
+import { LOCK_WAIT_MS } from './sessions.js';
 import { isNewer, latestVersion } from './update.js';
-import { budgetSeconds, timeoutFor } from './verify.js';
+import { budgetSeconds, timeoutFor, verify } from './verify.js';
 import { VERSION } from './version.js';
 
 export interface DoctorCheck {
@@ -32,6 +34,10 @@ export interface DoctorOptions {
   probeTimeoutMs?: number;
   /** Ask the registry whether a newer release exists. Default true; silently skipped offline. */
   checkLatest?: boolean;
+  /** Run the detected checks once on the current tree (dry run: no receipt, no state). Default true. */
+  baseline?: boolean;
+  onCheckStart?: (check: Check) => void;
+  onCheckDone?: (result: RunResult) => void;
 }
 
 interface ProbeResult {
@@ -137,7 +143,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   }
 
   // config + detection
-  let config = {};
+  let config: IsitdoneConfig = {};
   let configSource: string | null = null;
   try {
     const loaded = loadConfig(root);
@@ -155,6 +161,51 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
     checks.push({ name: 'checks', ok: true, detail: lines.join('; ') });
   }
   for (const n of detection.notes) checks.push({ name: 'note', ok: true, detail: n });
+
+  // baseline: the checks the hook will run, run once on the tree as it is now. A wrong guess (`mypy .` where CI runs
+  // `mypy src/pkg`) or a tree that is already red would otherwise surface as NOT DONE on every stop.
+  if ((opts.baseline ?? true) && detection.checks.length > 0) {
+    const res = await verify({
+      root,
+      config: { ...config, integrity: 'off' },
+      profile: 'full',
+      all: true,
+      useCache: true,
+      dryRun: true,
+      host: 'doctor',
+      lockWaitMs: config.otherSessions === 'ignore' ? 0 : LOCK_WAIT_MS,
+      onCheckStart: opts.onCheckStart,
+      onCheckDone: opts.onCheckDone,
+    });
+    const failed = res.ran.filter((r) => r.status !== 'PASS');
+    if (res.cached && res.receipt) {
+      checks.push({ name: 'baseline', ok: true, detail: `a PASS receipt from ${res.receipt.createdAt} already proves the current tree (${res.receipt.checks.length} check${res.receipt.checks.length === 1 ? '' : 's'})` });
+    } else if (failed.length === 0) {
+      checks.push({ name: 'baseline', ok: true, detail: `all ${res.ran.length} check${res.ran.length === 1 ? '' : 's'} pass on the current tree (${res.ran.map((r) => `${r.cmd} ${formatDuration(r.durationMs)}`).join(', ')})` });
+    } else {
+      for (const r of failed) {
+        const source = detection.checks.find((c) => c.id === r.id)?.source;
+        const tail = r.tail.slice(-3).map((l) => l.trim()).filter((l) => l !== '').join(' | ');
+        if (r.status === 'TIMEOUT') {
+          checks.push({
+            name: `baseline:${r.id}`,
+            ok: false,
+            detail: `${r.cmd} TIMES OUT on the current tree before any agent edit${source ? ` (detected from ${source})` : ''}: killed after ${formatDuration(r.timeoutMs)}${tail ? ` | ${tail}` : ''}`,
+            hint: `the hook would report NOT DONE on every stop. If the check is legitimately slow, raise "timeout" (or "liteTimeout") in .isitdone.json; if it hangs (watch mode, a prompt), set the right command there instead.`,
+          });
+        } else {
+          const why = r.status === 'ERROR' ? `could not start${r.tail[0] ? `: ${r.tail[0].trim()}` : ''}` : `exit ${r.exitCode ?? '?'}${r.summary ? `: ${r.summary}` : ''}`;
+          checks.push({
+            name: `baseline:${r.id}`,
+            ok: false,
+            detail: `${r.cmd} FAILS on the current tree before any agent edit${source ? ` (detected from ${source})` : ''}: ${why}${tail && !r.summary ? ` | ${tail}` : ''}`,
+            hint: `the hook would report NOT DONE on every stop. If this command is wrong for the repo, put the right one in .isitdone.json: {"checks": {"${r.id}": "<command>"}} (or false to drop the check); if the tree is really broken, fix it, then run \`npx isitdone\`.`,
+          });
+        }
+      }
+    }
+    for (const w of res.warnings) checks.push({ name: 'note', ok: true, detail: w });
+  }
 
   // hooks
   const hooks = installedHooks(root);

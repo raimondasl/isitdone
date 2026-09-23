@@ -26,7 +26,7 @@ const HELP = `isitdone ${VERSION} - don't let your coding agent say "done" until
 Usage
   ${NPX}                      run the repo's test/typecheck/lint checks, write a receipt
   ${NPX} init                 install the Stop hook into Claude Code (and other detected agents)
-  ${NPX} doctor               prove the hook fires and blocks
+  ${NPX} doctor               prove the hook fires and blocks, and that the checks start green
   ${NPX} receipt              show whether the current tree has a PASS receipt
   ${NPX} detect               show which checks would run
   ${NPX} hook --host <name>   (used by the agent) read the Stop payload on stdin, block if needed;
@@ -69,6 +69,7 @@ Options for init
   --remove                uninstall the hook(s)
   --no-edit-hook          only the Stop hook; skip the warn-only hook that runs after each test-file edit
   --no-doctor             skip the post-install doctor run
+  --no-baseline           skip running the detected checks once on the current tree (doctor accepts it too)
   --json                  machine-readable output
 
 Options for receipt
@@ -90,7 +91,7 @@ interface Args {
 }
 
 const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file']);
-const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook']);
+const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook', 'baseline']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
 
@@ -390,7 +391,7 @@ async function cmdInit(args: Args): Promise<number> {
   if (!remove) gi = ensureGitignore(root);
 
   if (json) {
-    const report = !remove && args.flags.doctor !== false ? await doctor({ root, probeHooks: args.flags.probe !== false, checkLatest: args.flags.latest !== false }) : null;
+    const report = !remove && args.flags.doctor !== false ? await doctor({ root, probeHooks: args.flags.probe !== false, checkLatest: args.flags.latest !== false, baseline: args.flags.baseline !== false }) : null;
     out(JSON.stringify({ root, hooks: results, detected: d.checks, notes: d.notes, gitignore: gi, doctor: report }, null, 2));
     return report ? (report.ok ? 0 : 1) : 0;
   }
@@ -421,7 +422,15 @@ async function cmdInit(args: Args): Promise<number> {
 async function cmdDoctor(args: Args): Promise<number> {
   const root = repoRoot(args.flags);
   const s = styleFor(process.stdout);
-  const report = await doctor({ root, probeHooks: args.flags.probe !== false, checkLatest: args.flags.latest !== false });
+  const live = args.flags.json !== true && Boolean(process.stdout.isTTY);
+  const report = await doctor({
+    root,
+    probeHooks: args.flags.probe !== false,
+    checkLatest: args.flags.latest !== false,
+    baseline: args.flags.baseline !== false,
+    onCheckStart: live ? (c) => process.stdout.write(s.dim(`  baseline: running ${c.cmd} ...`)) : undefined,
+    onCheckDone: live ? () => process.stdout.write(`\r${' '.repeat(70)}\r`) : undefined,
+  });
   if (args.flags.json === true) {
     out(JSON.stringify(report, null, 2));
     return report.ok ? 0 : 1;
