@@ -13,6 +13,8 @@ import { createInterface } from 'node:readline';
 import { codexSessionFiles, scanCodexSession } from './codex.js';
 import { cursorTranscriptFiles, defaultCursorDir, defaultCursorUserDir, openCursorStore, scanCursorTranscript, transcriptComposerId, type CursorComposer, type CursorStore } from './cursor.js';
 import { defaultGeminiDir, defaultQwenDir, geminiSessionFiles, qwenSessionFiles, scanGeminiSession, scanQwenSession } from './gemini.js';
+import { readDecisions, summarizeDecisions, type GateSummary } from './gatelog.js';
+import { findRoot } from './git.js';
 import { TurnTracker, ts, type ClaimRecord, type TurnStats, type Verdict } from './turns.js';
 
 export type { ClaimRecord, Verdict } from './turns.js';
@@ -61,6 +63,11 @@ export interface HistoryReport {
   /** Share of claims with no passing test run after the last edit. */
   unbackedPct: number;
   byProject: ProjectStats[];
+  /**
+   * What the isitdone Stop hook itself decided in these projects (.isitdone/decisions.jsonl), or null when none has a
+   * log. Transcripts only show the tests the agent ran; in a gated project the hook's own runs are counted here.
+   */
+  gate: (GateSummary & { dirs: string[] }) | null;
   since: string | null;
 }
 
@@ -206,6 +213,7 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
     verifiedPct: 0,
     unbackedPct: 0,
     byProject: [],
+    gate: null,
     since: since ? since.toISOString() : null,
   };
   const excludedDirs = new Set<string>();
@@ -396,6 +404,19 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
   report.byProject = [...by.values()]
     .map((s) => ({ ...s, unbackedPct: Math.round((100 * (s.claims - s.verified)) / s.claims) }))
     .sort((a, b) => b.claims - a.claims);
+
+  // The gate's own decision logs, in the projects the transcripts name (the root is where the hook keeps them).
+  const roots = new Set<string>();
+  for (const p of report.byProject) {
+    if (!existsSync(p.project)) continue;
+    try {
+      roots.add(findRoot(p.project));
+    } catch {
+      // unreadable: no log
+    }
+  }
+  const logs = [...roots].map((dir) => ({ dir, records: readDecisions(dir, since) })).filter((l) => l.records.length > 0);
+  report.gate = logs.length ? { ...summarizeDecisions(logs.map((l) => l.records)), dirs: logs.map((l) => l.dir) } : null;
   return report;
 }
 

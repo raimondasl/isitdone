@@ -88,7 +88,16 @@ isitdone history  ~/.claude/projects
   69% of "done" claims had no passing test run behind them.
 ```
 
-That is the author's real result over seven months of sessions. Post yours. The longer story of why the gate sits where it does is in [docs/why.md](docs/why.md) (also [on DEV](https://dev.to/raimondasl/69-of-my-coding-agents-done-claims-werent-here-is-the-gate-i-put-in-front-of-them-lho), where comments are open).
+That is the author's real result over seven months of sessions, before the gate. Post yours.
+
+Once the gate is installed, that measure alone undercounts: the verification happens inside the Stop hook, and a transcript does not show the hook's run as a test the agent ran. So the hook keeps a local log of its own decisions (`.isitdone/decisions.jsonl`: one line per stop with the outcome, whether the final message claimed completion, and check counts; no message text, no paths, the session id only hashed), and `history` adds what the gate did in the projects it scanned. The layout, with illustrative numbers:
+
+```
+  gate  the isitdone Stop hook decided 132 stops in 2 projects (.isitdone/decisions.jsonl)
+        97 passed; 21 turns blocked: 18 fixed and then passed, 2 gave up after the cap, 1 released
+        64 stops claimed done; 12 of them were refused (19%)
+```
+ The longer story of why the gate sits where it does is in [docs/why.md](docs/why.md) (also [on DEV](https://dev.to/raimondasl/69-of-my-coding-agents-done-claims-werent-here-is-the-gate-i-put-in-front-of-them-lho), where comments are open).
 
 ## Install
 

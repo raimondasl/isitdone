@@ -261,6 +261,14 @@ async function cmdHistory(args: Args): Promise<number> {
     out(`  ${s.bold(`${report.unbackedPct}% of "done" claims had no passing test run behind them.`)}`);
     const mixed = report.claims.filter((c) => c.verdict === 'VERIFIED' && c.testFails > 0).length;
     if (mixed > 0) out(`  ${s.yellow(`${mixed} of the verified claims had a failed test run earlier in the same turn; only the last command passed, and it may have been a narrower one (--verbose marks them).`)}`);
+    const g = report.gate;
+    if (g) {
+      out('');
+      out(`  ${s.bold('gate')}  the isitdone Stop hook decided ${g.checked} stop${g.checked === 1 ? '' : 's'} in ${g.projects} project${g.projects === 1 ? '' : 's'} ${s.dim('(.isitdone/decisions.jsonl)')}`);
+      out(`        ${g.passed} passed; ${g.blockedTurns} turn${g.blockedTurns === 1 ? '' : 's'} blocked: ${g.fixed} fixed and then passed, ${g.gaveUp} gave up after the cap, ${g.released} released${g.open ? `, ${g.open} still open` : ''}`);
+      if (g.claims) out(`        ${g.claims} stop${g.claims === 1 ? '' : 's'} claimed done; ${g.claimsBlocked} of them ${g.claimsBlocked === 1 ? 'was' : 'were'} refused (${pct(g.claimsBlocked, g.claims)})`);
+      out(`        ${s.dim('transcripts only show the tests the agent ran itself; the hook\'s own runs in these projects are counted here, not above')}`);
+    }
     const worst = [...report.byProject].filter((p) => p.claims >= 5).sort((a, b) => b.unbackedPct - a.unbackedPct)[0];
     if (worst) out(`  worst project  ${worst.project}  ${worst.unbackedPct}% unbacked (${worst.claims} claims)`);
     if (args.flags.verbose === true) {

@@ -6,6 +6,7 @@ import { detectChecks } from './detect.js';
 import { collectDiff, type DiffResult } from './diff.js';
 import { checkEditedFile, insideRepo, toRepoPath } from './editcheck.js';
 import { tryReadJsonFile, writeFileAtomic } from './fsutil.js';
+import { appendDecision, type GateKind } from './gatelog.js';
 import { dirtyPathSet, findRoot, gitTopLevel, RECEIPT_DIR, trackedPaths } from './git.js';
 import { getHost, type HookInput, type HostAdapter, type HostName } from './hosts.js';
 import { DEFAULT_HOOK_TIMEOUT_S, HOOK_MARGIN_S } from './init.js';
@@ -54,6 +55,16 @@ export interface HookOutcome {
   why: string;
   result: VerifyResult | null;
   attempts: number;
+  /** What the gate did, for .isitdone/decisions.jsonl; absent when the stop was not a gate decision (nested run, plan mode, doctor). */
+  kind?: GateKind;
+}
+
+/** Filled in while a stop is decided, then written to .isitdone/decisions.jsonl. */
+interface StopLog {
+  root: string | null;
+  session: string | null;
+  claim: boolean | null;
+  profile: 'lite' | 'full' | null;
 }
 
 export interface HookOptions {
@@ -158,10 +169,30 @@ const GIVE_UP_MESSAGE = (n: number) => `isitdone: checks still failing after ${n
  * returns what to print and which exit code to use.
  */
 export async function runHook(opts: HookOptions): Promise<HookOutcome> {
+  const log: StopLog = { root: null, session: null, claim: null, profile: null };
+  const outcome = await decideStop(opts, log);
+  if (!opts.doctor && log.root !== null && outcome.kind) {
+    const r = outcome.result;
+    appendDecision(log.root, {
+      t: new Date().toISOString(),
+      host: getHost(opts.host).name,
+      session: log.session ?? 'anon',
+      kind: outcome.kind,
+      claim: log.claim,
+      profile: log.profile,
+      attempts: outcome.attempts,
+      checks: r ? (r.cached ? (r.receipt?.checks.length ?? 0) : r.ran.length) : 0,
+      failed: r ? r.ran.filter((x) => x.status !== 'PASS').length : 0,
+    });
+  }
+  return outcome;
+}
+
+async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome> {
   const host: HostAdapter = getHost(opts.host);
   const doctor = opts.doctor ?? false;
   const env = opts.env ?? process.env;
-  const allow = (why: string, systemMessage?: string, result: VerifyResult | null = null, attempts = 0): HookOutcome => ({
+  const allow = (why: string, systemMessage?: string, result: VerifyResult | null = null, attempts = 0, kind?: GateKind): HookOutcome => ({
     stdout: host.allow(systemMessage),
     stderr: '',
     exitCode: 0,
@@ -169,6 +200,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     why,
     result,
     attempts,
+    kind,
   });
 
   // A check that itself runs isitdone (e.g. a Makefile target) must not recurse.
@@ -190,13 +222,15 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   const cwd = input.cwd && existsSync(input.cwd) ? input.cwd : (opts.cwd ?? process.cwd());
   const topLevel = gitTopLevel(cwd);
   const root = findRoot(cwd, topLevel);
+  log.root = root;
+  log.session = sessionKey(host.name, input.sessionId);
 
   let config: IsitdoneConfig;
   try {
     config = loadConfig(root).config;
   } catch (err) {
     // A broken config must not brick the agent; surface it to the user instead.
-    return allow(`config error: ${(err as Error).message}`, `isitdone: ${(err as Error).message}`);
+    return allow(`config error: ${(err as Error).message}`, `isitdone: ${(err as Error).message}`, null, 0, 'error');
   }
   if (doctor) {
     // Doctor proves the plumbing: only the injected probe runs, and it always fails.
@@ -214,14 +248,16 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     // Record this stop so the next one (same loop_count on Cursor) counts as a new turn. Hosts without a flag start
     // counting again: the turn ends with this allow, so their next stop can only follow a new prompt.
     if (!doctor && prev) writeState(root, { ...prev, attempts: input.stopHookActive === null ? 0 : prev.attempts, loopCount: input.loopCount, turnId: input.turnId, updatedAt: new Date().toISOString() });
-    return allow(`already blocked ${attempts} time(s) this turn (max ${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts), null, attempts);
+    return allow(`already blocked ${attempts} time(s) this turn (max ${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts), null, attempts, 'gave-up');
   }
 
   const { profile, claim, why } = resolveProfile(config, input, opts.profile);
+  log.claim = input.lastMessage === null ? null : claim !== null;
+  log.profile = profile;
 
   // A stop with background tasks running and no completion claim is a pause, not "done".
   if (input.backgroundTasks > 0 && !claim && profile === 'lite') {
-    return allow(`${input.backgroundTasks} background task(s) still running and no completion claim; treating this stop as a pause`);
+    return allow(`${input.backgroundTasks} background task(s) still running and no completion claim; treating this stop as a pause`, undefined, null, 0, 'paused');
   }
 
   // Another session working in this same tree? Only with proof (see sessions.ts): a session on its own is gated as ever.
@@ -314,7 +350,8 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
   if (view.ok && !integrityBlocks(view)) {
     if (!doctor) writeState(root, state(0, 0, true));
     if (!doctor && top !== null && provedAt !== null) recordPass(top, host.name, input.sessionId, provedAt);
-    return allow(`${view.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, view, 0);
+    const kind: GateKind = view.cached ? 'passed-cached' : view.ran.length === 0 ? 'no-checks' : profile === 'full' ? 'passed' : 'passed-lite';
+    return allow(`${view.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, view, 0, kind);
   }
 
   const failedCount = view.ran.filter((r) => r.status !== 'PASS').length;
@@ -331,16 +368,16 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     if (!doctor) writeState(root, state(input.stopHookActive === null ? 0 : attempts));
     const theirs = others.attribution.foreign.slice(0, 5).map((x) => x.path).join(', ') + (others.attribution.foreign.length > 5 ? ', ...' : '');
     const message = `isitdone: ${failedCount} check${failedCount === 1 ? '' : 's'} still failing, but nothing in the output names a file this session edited, and another session has uncommitted work here (${theirs}). This session was let go after one block; the receipt says FAIL. Run \`npx isitdone\` once both sessions are finished.`;
-    return allow(`${failedCount} check(s) failed, not tied to this session while another session works here (${why})`, warn ? `${message} (${warn})` : message, view, attempts);
+    return allow(`${failedCount} check(s) failed, not tied to this session while another session works here (${why})`, warn ? `${message} (${warn})` : message, view, attempts, 'released');
   }
 
   attempts += 1;
   if (!doctor && !writeState(root, state(attempts, others ? softBlocks + 1 : softBlocks))) {
     // Without persisted state the attempts cap cannot work; blocking could loop forever.
-    return allow('checks failed but session state could not be written; allowing to avoid an unbounded loop', `isitdone: checks failed but .isitdone/ is not writable, so the stop was allowed without enforcement. Run \`npx isitdone\` to see the failures.`, view, attempts);
+    return allow('checks failed but session state could not be written; allowing to avoid an unbounded loop', `isitdone: checks failed but .isitdone/ is not writable, so the stop was allowed without enforcement. Run \`npx isitdone\` to see the failures.`, view, attempts, 'unenforced');
   }
   if (attempts > maxAttempts) {
-    return allow(`checks failed but attempts (${attempts}) exceed max (${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts - 1), view, attempts);
+    return allow(`checks failed but attempts (${attempts}) exceed max (${maxAttempts}); letting the agent stop`, GIVE_UP_MESSAGE(attempts - 1), view, attempts, 'gave-up');
   }
   let reason = formatBlockReason(view, attempts, maxAttempts, others ? sessionNote(others.attribution, !tied) : null);
   if (warn) reason += `\n(${warn})`;
@@ -352,6 +389,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
     why: `${failedCount} check(s) failed (${why})`,
     result: view,
     attempts,
+    kind: 'blocked',
   };
 }
 

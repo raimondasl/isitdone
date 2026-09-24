@@ -4,6 +4,13 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-24
+
+### Added
+
+- The Stop hook keeps a local log of its own decisions, `.isitdone/decisions.jsonl` (git-ignored with the rest of `.isitdone/`): one line per stop with the outcome (passed, passed on lite checks, passed from a cached receipt, blocked, gave up after the cap, released, no checks, paused, config error), whether the final message claimed completion, the profile, the attempt number and check counts. No message text, no paths; the session id only as the hashed key the state files already use. It never delays or changes a decision, and keeps its newest half past 512 KB.
+- `isitdone history` reads those logs in the projects it scanned and reports what the gate did: stops decided, passes, turns blocked and how each ended (fixed and then passed, gave up, released), and how many claimed-done stops were refused. `--json` carries it as `gate`. Transcripts only show the tests the agent ran itself, so in a gated project the hook's own runs were invisible to `history`; a reader on DEV asked whether the false-done rate fell after the gate went in, and this is what can answer it.
+
 ### Changed
 
 - `npm run bench` prints the version and commit it ran on and the exact counts behind each percentage, and a second table with recall per detector: over the cases that name only that detector (cases that accept either of two detectors are counted in their own column, since they can pass on a sibling), plus the detectors no case names. The corpus grew from 175 to 192 cases: `test-file-deleted` (a deleted test file, a test file renamed out of the test locations, a Maven test class renamed to a name Surefire does not run) had no case at all, and `ci-workflow-deleted`, `only-added`, `tolerance-widened`, `test-step-removed` and `test-case-removed` had fewer than three single-label cases. Every new case passes. The case format gained `renames` and unchanged context files. Prompted by a reader's audit of the corpus on DEV.
