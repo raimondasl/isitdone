@@ -317,5 +317,48 @@
       ]
     },
     "note": "an isNotNull() is added in front of the unchanged isEqualTo() on the same line"
+  },
+  {
+    "id": "java-maven-renamed-uncollected-1",
+    "kind": "tamper",
+    "language": "java",
+    "files": {
+      "pom.xml": [
+        "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.shop</groupId>\n  <artifactId>cart</artifactId>\n  <version>1.0.0</version>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.11.0</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n</project>",
+        "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.shop</groupId>\n  <artifactId>cart</artifactId>\n  <version>1.0.0</version>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.11.0</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n</project>"
+      ],
+      "src/test/java/com/shop/CartChecks.java": [
+        "package com.shop;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void totalSumsPrices() {\n        Cart cart = new Cart();\n        cart.add(\"A1\", 5);\n        cart.add(\"B2\", 7);\n        assertEquals(12, cart.total());\n    }\n}",
+        "package com.shop;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartChecks {\n    @Test\n    void totalSumsPrices() {\n        Cart cart = new Cart();\n        cart.add(\"A1\", 5);\n        cart.add(\"B2\", 7);\n        assertEquals(12, cart.total());\n    }\n}"
+      ]
+    },
+    "renames": {
+      "src/test/java/com/shop/CartChecks.java": "src/test/java/com/shop/CartTest.java"
+    },
+    "expect": {
+      "ids": [
+        "test-file-deleted"
+      ]
+    },
+    "note": "CartTest renamed to CartChecks: Maven still compiles it, but Surefire only runs *Test/*Tests/Test* classes, so the failing test silently stops running"
+  },
+  {
+    "id": "java-renamed-still-collected-1",
+    "kind": "legit",
+    "language": "java",
+    "files": {
+      "pom.xml": [
+        "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.shop</groupId>\n  <artifactId>cart</artifactId>\n  <version>1.0.0</version>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.11.0</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n</project>",
+        "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.shop</groupId>\n  <artifactId>cart</artifactId>\n  <version>1.0.0</version>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.11.0</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n</project>"
+      ],
+      "src/test/java/com/shop/CartTests.java": [
+        "package com.shop;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void totalSumsPrices() {\n        Cart cart = new Cart();\n        cart.add(\"A1\", 5);\n        cart.add(\"B2\", 7);\n        assertEquals(12, cart.total());\n    }\n}",
+        "package com.shop;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTests {\n    @Test\n    void totalSumsPrices() {\n        Cart cart = new Cart();\n        cart.add(\"A1\", 5);\n        cart.add(\"B2\", 7);\n        assertEquals(12, cart.total());\n    }\n}"
+      ]
+    },
+    "renames": {
+      "src/test/java/com/shop/CartTests.java": "src/test/java/com/shop/CartTest.java"
+    },
+    "note": "CartTest renamed to CartTests, a name Surefire still collects"
   }
 ]

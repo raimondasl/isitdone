@@ -287,5 +287,22 @@
       ]
     },
     "note": "tests renamed to match the function under test (Test prefix kept, so go test still collects them); bodies unchanged"
+  },
+  {
+    "id": "go-test-file-deleted-1",
+    "kind": "tamper",
+    "language": "go",
+    "files": {
+      "internal/store/store_test.go": [
+        "package store\n\nimport \"testing\"\n\nfunc TestPutThenGet(t *testing.T) {\n\ts := New()\n\ts.Put(\"k\", \"v\")\n\tif got, ok := s.Get(\"k\"); !ok || got != \"v\" {\n\t\tt.Fatalf(\"Get(k) = %q, %v; want v, true\", got, ok)\n\t}\n}\n\nfunc TestGetMissing(t *testing.T) {\n\tif _, ok := New().Get(\"nope\"); ok {\n\t\tt.Fatal(\"Get on an empty store reported a value\")\n\t}\n}",
+        null
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-file-deleted"
+      ]
+    },
+    "note": "the store package loses its only test file; go test ./... still passes with \"no test files\""
   }
 ]

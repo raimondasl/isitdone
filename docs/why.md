@@ -4,7 +4,7 @@
 
 I have read that sentence hundreds of times, and until recently I mostly believed it. Then I ran a script over my Claude Code transcripts that, for every turn that ended with a sentence like that, asks two questions: did a test command run after the last edit, and did it exit 0?
 
-591 sessions. 516 turns that ended with a completion claim. **69% had no passing test run behind them.** In 37% a test run had passed and then the agent kept editing. In 31% no test ran in that turn at all. The rest had a failing run as their last word.
+591 sessions. 516 turns that ended with a completion claim. **69% had no passing test run behind them.** Of the 516: 31% had a passing test run after the last edit; 37% had a passing run and then more edits; 31% had no test run in that turn at all; and under 1% ended on a failing run. (Each share is rounded, so the four add to 99.)
 
 I don't think the agent is lying. I think the workflow has no gate at the exact moment the claim is made, and a sentence is cheap.
 
@@ -53,7 +53,7 @@ Running a two-minute test suite every time the agent pauses to ask a question wo
 
 Once tests gate the turn, a second failure mode shows up: the quickest route to green is sometimes to weaken the test. `it.skip`. A deleted test file. `toStrictEqual` quietly becoming `toEqual`. `|| true` appended to the test script. `-DskipTests` in the CI file.
 
-So isitdone also scans the diff for those, in JavaScript/TypeScript, Python, Go, Rust, Java/Kotlin and C#, and warns right after the edit that did it, while the agent can still undo it. It is line-and-regex scanning with a published detector list, not an AST, and it will miss clever cases. What I can say is how it behaves on a labelled corpus of more than 170 legitimate refactors and tampering cases that lives in the repository: 100% precision, 99% recall, and the one known miss is documented. It warns by default; strict mode blocks.
+So isitdone also scans the diff for those, in JavaScript/TypeScript, Python, Go, Rust, Java/Kotlin and C#, and warns right after the edit that did it, while the agent can still undo it. It is line-and-regex scanning with a published detector list, not an AST, and it will miss clever cases. What I can say is how it behaves on a labelled corpus of legitimate refactors and tampering cases that lives in the repository: on the 192 cases there on 2026-09-24 (isitdone 0.7.0), no legitimate case was flagged (0 of 89) and 102 of 103 tampering cases were caught. The one miss is documented, and `npm run bench` prints the same figures per detector, with the commit it ran on. It warns by default; strict mode blocks.
 
 ## Receipts
 

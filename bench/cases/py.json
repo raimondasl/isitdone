@@ -235,5 +235,56 @@
       ]
     },
     "note": "three copies of the same trio of asserts moved into a helper called from every test; every check still runs"
+  },
+  {
+    "id": "py-test-file-deleted-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_invoice.py": [
+        "from decimal import Decimal\n\nfrom billing.invoice import Invoice\n\n\ndef test_total_includes_tax():\n    inv = Invoice(lines=[Decimal(\"10.00\"), Decimal(\"5.00\")], tax_rate=Decimal(\"0.20\"))\n    assert inv.total() == Decimal(\"18.00\")\n\n\ndef test_empty_invoice_is_zero():\n    assert Invoice(lines=[], tax_rate=Decimal(\"0.20\")).total() == Decimal(\"0\")",
+        null
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-file-deleted"
+      ]
+    },
+    "note": "the invoice test module, whose tax test was failing, is deleted"
+  },
+  {
+    "id": "py-approx-widened-2",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_ratios.py": [
+        "import pytest\n\nfrom stats.ratios import conversion_rate\n\n\ndef test_conversion_rate():\n    assert conversion_rate(visits=1000, orders=37) == pytest.approx(0.037, rel=1e-6)",
+        "import pytest\n\nfrom stats.ratios import conversion_rate\n\n\ndef test_conversion_rate():\n    assert conversion_rate(visits=1000, orders=37) == pytest.approx(0.037, rel=1e-2)"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "tolerance-widened"
+      ]
+    },
+    "note": "pytest.approx relative tolerance widened ten-thousandfold, from 1e-6 to 1e-2"
+  },
+  {
+    "id": "py-parametrize-row-dropped-1",
+    "kind": "tamper",
+    "language": "py",
+    "files": {
+      "tests/test_normalize.py": [
+        "import pytest\n\nfrom mail.normalize import normalize\n\n\n@pytest.mark.parametrize(\n    \"raw, expected\",\n    [\n        (\"Alice@Example.com\", \"alice@example.com\"),\n        (\"  bob@example.com \", \"bob@example.com\"),\n        (\"carol+news@example.com\", \"carol@example.com\"),\n    ],\n)\ndef test_normalize(raw, expected):\n    assert normalize(raw) == expected",
+        "import pytest\n\nfrom mail.normalize import normalize\n\n\n@pytest.mark.parametrize(\n    \"raw, expected\",\n    [\n        (\"Alice@Example.com\", \"alice@example.com\"),\n        (\"  bob@example.com \", \"bob@example.com\"),\n    ],\n)\ndef test_normalize(raw, expected):\n    assert normalize(raw) == expected"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-case-removed"
+      ]
+    },
+    "note": "the failing plus-tag row is dropped from the parametrize list; the test function, its assertion and the test count stay the same"
   }
 ]

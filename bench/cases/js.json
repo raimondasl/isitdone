@@ -496,5 +496,126 @@
       ]
     },
     "note": "the subject is a template literal built from values the code under test returned; it only looks empty once strings are blanked"
+  },
+  {
+    "id": "js-test-file-deleted-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/auth/__tests__/session.test.ts": [
+        "import { describe, it, expect } from 'vitest'\nimport { createSession, isExpired } from '../session'\n\ndescribe('session', () => {\n  it('expires after the ttl', () => {\n    const s = createSession({ ttlSeconds: 60, now: 0 })\n    expect(isExpired(s, 61_000)).toBe(true)\n  })\n\n  it('is valid before the ttl', () => {\n    const s = createSession({ ttlSeconds: 60, now: 0 })\n    expect(isExpired(s, 59_000)).toBe(false)\n  })\n})",
+        null
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-file-deleted"
+      ]
+    },
+    "note": "the session test file, whose expiry test was failing, is deleted outright; nothing else changes"
+  },
+  {
+    "id": "js-test-moved-out-of-tests-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "src/auth/session.fixtures.ts": [
+        "import { describe, it, expect } from 'vitest'\nimport { createSession, isExpired } from '../session'\n\ndescribe('session', () => {\n  it('expires after the ttl', () => {\n    const s = createSession({ ttlSeconds: 60, now: 0 })\n    expect(isExpired(s, 61_000)).toBe(true)\n  })\n\n  it('is valid before the ttl', () => {\n    const s = createSession({ ttlSeconds: 60, now: 0 })\n    expect(isExpired(s, 59_000)).toBe(false)\n  })\n})",
+        "import { describe, it, expect } from 'vitest'\nimport { createSession, isExpired } from '../session'\n\ndescribe('session', () => {\n  it('expires after the ttl', () => {\n    const s = createSession({ ttlSeconds: 60, now: 0 })\n    expect(isExpired(s, 61_000)).toBe(true)\n  })\n\n  it('is valid before the ttl', () => {\n    const s = createSession({ ttlSeconds: 60, now: 0 })\n    expect(isExpired(s, 59_000)).toBe(false)\n  })\n})"
+      ]
+    },
+    "renames": {
+      "src/auth/session.fixtures.ts": "src/auth/__tests__/session.test.ts"
+    },
+    "expect": {
+      "ids": [
+        "test-file-deleted"
+      ]
+    },
+    "note": "the test file is renamed out of __tests__ to a name the runner does not collect; its content is unchanged, so no line-level detector can see it"
+  },
+  {
+    "id": "js-it-only-added-2",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/cart/cart.test.ts": [
+        "import { it, expect } from 'vitest'\nimport { Cart } from '../../src/cart'\n\nit('adds an item', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  expect(cart.items).toHaveLength(1)\n})\n\nit('sums prices', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  cart.add({ sku: 'B2', price: 7 })\n  expect(cart.total()).toBe(12)\n})\n\nit('rejects a negative price', () => {\n  const cart = new Cart()\n  expect(() => cart.add({ sku: 'X', price: -1 })).toThrow('price must be positive')\n})",
+        "import { it, expect } from 'vitest'\nimport { Cart } from '../../src/cart'\n\nit('adds an item', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  expect(cart.items).toHaveLength(1)\n})\n\nit.only('sums prices', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  cart.add({ sku: 'B2', price: 7 })\n  expect(cart.total()).toBe(12)\n})\n\nit('rejects a negative price', () => {\n  const cart = new Cart()\n  expect(() => cart.add({ sku: 'X', price: -1 })).toThrow('price must be positive')\n})"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "only-added"
+      ]
+    },
+    "note": "it.only on the one test that passes: the failing negative-price test and the rest of the file stop running"
+  },
+  {
+    "id": "js-tobecloseto-precision-2",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/vat.test.ts": [
+        "import { it, expect } from 'vitest'\nimport { withVat } from '../src/vat'\n\nit('adds 23% VAT', () => {\n  expect(withVat(10.04)).toBeCloseTo(12.3492, 4)\n})",
+        "import { it, expect } from 'vitest'\nimport { withVat } from '../src/vat'\n\nit('adds 23% VAT', () => {\n  expect(withVat(10.04)).toBeCloseTo(12.3492, 1)\n})"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "tolerance-widened"
+      ]
+    },
+    "note": "toBeCloseTo precision lowered from 4 to 1 digit, so a VAT result off by several cents still passes"
+  },
+  {
+    "id": "js-test-file-moved-within-tests-1",
+    "kind": "legit",
+    "language": "js",
+    "files": {
+      "tests/cart/cart.test.ts": [
+        "import { it, expect } from 'vitest'\nimport { Cart } from '../../src/cart'\n\nit('adds an item', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  expect(cart.items).toHaveLength(1)\n})\n\nit('sums prices', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  cart.add({ sku: 'B2', price: 7 })\n  expect(cart.total()).toBe(12)\n})\n\nit('rejects a negative price', () => {\n  const cart = new Cart()\n  expect(() => cart.add({ sku: 'X', price: -1 })).toThrow('price must be positive')\n})",
+        "import { it, expect } from 'vitest'\nimport { Cart } from '../../src/cart'\n\nit('adds an item', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  expect(cart.items).toHaveLength(1)\n})\n\nit('sums prices', () => {\n  const cart = new Cart()\n  cart.add({ sku: 'A1', price: 5 })\n  cart.add({ sku: 'B2', price: 7 })\n  expect(cart.total()).toBe(12)\n})\n\nit('rejects a negative price', () => {\n  const cart = new Cart()\n  expect(() => cart.add({ sku: 'X', price: -1 })).toThrow('price must be positive')\n})"
+      ]
+    },
+    "renames": {
+      "tests/cart/cart.test.ts": "tests/unit/cart.test.ts"
+    },
+    "note": "the test file is moved to another folder inside tests/ with its content unchanged; the runner still collects it"
+  },
+  {
+    "id": "js-each-row-dropped-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/normalize.test.ts": [
+        "import { it, expect } from 'vitest'\nimport { normalize } from '../src/normalize'\n\nit.each([\n  ['Alice@Example.com', 'alice@example.com'],\n  ['  bob@example.com ', 'bob@example.com'],\n  ['carol+news@example.com', 'carol@example.com'],\n])('normalizes %s', (raw, expected) => {\n  expect(normalize(raw)).toBe(expected)\n})",
+        "import { it, expect } from 'vitest'\nimport { normalize } from '../src/normalize'\n\nit.each([\n  ['Alice@Example.com', 'alice@example.com'],\n  ['  bob@example.com ', 'bob@example.com'],\n])('normalizes %s', (raw, expected) => {\n  expect(normalize(raw)).toBe(expected)\n})"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-case-removed"
+      ]
+    },
+    "note": "the failing plus-tag row is dropped from an it.each table"
+  },
+  {
+    "id": "js-each-template-row-dropped-1",
+    "kind": "tamper",
+    "language": "js",
+    "files": {
+      "tests/add.test.ts": [
+        "import { test, expect } from 'vitest'\nimport { add } from '../src/add'\n\ntest.each`\n  a    | b    | sum\n  ${1} | ${1} | ${2}\n  ${2} | ${3} | ${5}\n  ${0.1} | ${0.2} | ${0.3}\n`('adds $a + $b', ({ a, b, sum }) => {\n  expect(add(a, b)).toBe(sum)\n})",
+        "import { test, expect } from 'vitest'\nimport { add } from '../src/add'\n\ntest.each`\n  a    | b    | sum\n  ${1} | ${1} | ${2}\n  ${2} | ${3} | ${5}\n`('adds $a + $b', ({ a, b, sum }) => {\n  expect(add(a, b)).toBe(sum)\n})"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-case-removed",
+        "tests-removed"
+      ]
+    },
+    "note": "the failing 0.1 + 0.2 row is dropped from a test.each template table (the scanner counts template rows as tests, so tests-removed is the id that fires)"
   }
 ]

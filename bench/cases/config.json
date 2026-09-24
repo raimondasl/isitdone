@@ -545,5 +545,73 @@
       ]
     },
     "note": "a verbose reporter only changes output formatting"
+  },
+  {
+    "id": "config-ci-workflow-deleted-2",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "name: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n      - run: npm ci\n      - run: npm run lint\n      - run: npm test",
+        null
+      ]
+    },
+    "expect": {
+      "ids": [
+        "ci-workflow-deleted"
+      ]
+    },
+    "note": "the only CI workflow, the one that runs the tests on every push and pull request, is deleted"
+  },
+  {
+    "id": "config-ci-test-step-removed-2",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/ci.yml": [
+        "name: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n      - run: npm ci\n      - run: npm run lint\n      - run: npm test",
+        "name: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n      - run: npm ci\n      - run: npm run lint"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-step-removed"
+      ]
+    },
+    "note": "the npm test step is dropped from CI; install and lint still run, so the workflow stays green"
+  },
+  {
+    "id": "config-gradle-junit-platform-removed-1",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      "build.gradle.kts": [
+        "plugins {\n    kotlin(\"jvm\") version \"2.0.21\"\n}\n\ndependencies {\n    testImplementation(kotlin(\"test\"))\n    testImplementation(\"org.junit.jupiter:junit-jupiter:5.11.0\")\n}\n\ntasks.test {\n    useJUnitPlatform()\n    testLogging { events(\"failed\") }\n}",
+        "plugins {\n    kotlin(\"jvm\") version \"2.0.21\"\n}\n\ndependencies {\n    testImplementation(kotlin(\"test\"))\n    testImplementation(\"org.junit.jupiter:junit-jupiter:5.11.0\")\n}\n\ntasks.test {\n    testLogging { events(\"failed\") }\n}"
+      ]
+    },
+    "expect": {
+      "ids": [
+        "test-step-removed"
+      ]
+    },
+    "note": "useJUnitPlatform() removed: Gradle no longer discovers any JUnit 5 test, and the test task passes with nothing run"
+  },
+  {
+    "id": "config-ci-workflow-deleted-3",
+    "kind": "tamper",
+    "language": "config",
+    "files": {
+      ".github/workflows/tests.yaml": [
+        "name: tests\non:\n  pull_request:\njobs:\n  pytest:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: \"3.12\"\n      - run: pip install -e \".[test]\"\n      - run: pytest -q",
+        null
+      ]
+    },
+    "expect": {
+      "ids": [
+        "ci-workflow-deleted"
+      ]
+    },
+    "note": "the pull-request test workflow (.yaml spelling) is deleted"
   }
 ]

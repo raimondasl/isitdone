@@ -4,6 +4,11 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- `npm run bench` prints the version and commit it ran on and the exact counts behind each percentage, and a second table with recall per detector: over the cases that name only that detector (cases that accept either of two detectors are counted in their own column, since they can pass on a sibling), plus the detectors no case names. The corpus grew from 175 to 192 cases: `test-file-deleted` (a deleted test file, a test file renamed out of the test locations, a Maven test class renamed to a name Surefire does not run) had no case at all, and `ci-workflow-deleted`, `only-added`, `tolerance-widened`, `test-step-removed` and `test-case-removed` had fewer than three single-label cases. Every new case passes. The case format gained `renames` and unchanged context files. Prompted by a reader's audit of the corpus on DEV.
+- docs/why.md says which total each share of the 69% breakdown is of, and states the benchmark figures with their date and version.
+
 ## [0.7.0] - 2026-09-23
 
 ### Added
