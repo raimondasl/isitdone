@@ -88,7 +88,7 @@ isitdone history  ~/.claude/projects
   69% of "done" claims had no passing test run behind them.
 ```
 
-That is the author's real result over seven months of sessions, before the gate. Post yours.
+That is the author's real result, as isitdone 0.2.0 printed it on 2026-09-07, over Claude Code sessions with claims dated 2026-06-20 to 2026-09-07, before the gate. Recounted on 2026-09-25 with isitdone 0.8.0, whose claim and turn detection is stricter, the same transcripts (all still on disk) give 495 claims up to 2026-09-07: 173 verified (35%), 174 stale (35%), 3 failed (under 1%) and 145 never ran (29%), so **65%** had no passing test run behind them. The failing-run row above printed 0% for 3 claims; `history` now prints the count beside every share and never rounds a non-empty row to 0%. Post yours.
 
 Once the gate is installed, that measure alone undercounts: the verification happens inside the Stop hook, and a transcript does not show the hook's run as a test the agent ran. So the hook keeps a local log of its own decisions (`.isitdone/decisions.jsonl`: one line per stop with the outcome, whether the final message claimed completion, and check counts; no message text, no paths, the session id only hashed), and `history` adds what the gate did in the projects it scanned. The layout, with illustrative numbers:
 

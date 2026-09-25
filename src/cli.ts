@@ -203,7 +203,12 @@ async function cmdRun(args: Args): Promise<number> {
 }
 
 function pct(n: number, total: number): string {
-  return total === 0 ? '-' : `${Math.round((100 * n) / total)}%`;
+  if (total === 0) return '-';
+  const v = Math.round((100 * n) / total);
+  // A bucket that holds anything never shows 0%, and one short of everything never shows 100%.
+  if (v === 0 && n > 0) return '<1%';
+  if (v === 100 && n < total) return '>99%';
+  return `${v}%`;
 }
 
 async function cmdHistory(args: Args): Promise<number> {
@@ -253,10 +258,10 @@ async function cmdHistory(args: Args): Promise<number> {
       return 0;
     }
     out('');
-    out(`  ${s.green('VERIFIED')}   ${pad(pct(verified, total), 5)} a test command passed after the last edit`);
-    out(`  ${s.yellow('STALE')}      ${pad(pct(report.counts.STALE, total), 5)} tests passed, then more edits, no re-run`);
-    out(`  ${s.red('FAILED')}     ${pad(pct(report.counts.FAILED, total), 5)} the last test run failed, "done" claimed anyway`);
-    out(`  ${s.red('NEVER RAN')}  ${pad(pct(report.counts.NEVER_RAN, total), 5)} no test command in the turn at all`);
+    out(`  ${s.green('VERIFIED')}   ${pad(pct(verified, total), 5)} ${s.dim(pad(`(${verified})`, 7))} a test command passed after the last edit`);
+    out(`  ${s.yellow('STALE')}      ${pad(pct(report.counts.STALE, total), 5)} ${s.dim(pad(`(${report.counts.STALE})`, 7))} tests passed, then more edits, no re-run`);
+    out(`  ${s.red('FAILED')}     ${pad(pct(report.counts.FAILED, total), 5)} ${s.dim(pad(`(${report.counts.FAILED})`, 7))} the last test run failed, "done" claimed anyway`);
+    out(`  ${s.red('NEVER RAN')}  ${pad(pct(report.counts.NEVER_RAN, total), 5)} ${s.dim(pad(`(${report.counts.NEVER_RAN})`, 7))} no test command in the turn at all`);
     out('');
     out(`  ${s.bold(`${report.unbackedPct}% of "done" claims had no passing test run behind them.`)}`);
     const mixed = report.claims.filter((c) => c.verdict === 'VERIFIED' && c.testFails > 0).length;

@@ -6,6 +6,8 @@ I have read that sentence hundreds of times, and until recently I mostly believe
 
 591 sessions. 516 turns that ended with a completion claim. **69% had no passing test run behind them.** Of the 516: 31% had a passing test run after the last edit; 37% had a passing run and then more edits; 31% had no test run in that turn at all; and under 1% ended on a failing run. (Each share is rounded, so the four add to 99.)
 
+*Update, 2026-09-25: those numbers came from isitdone 0.2.0 on 2026-09-07. Recounted with isitdone 0.8.0, whose claim and turn detection is stricter, the same transcripts give 495 claims and **65%** without a passing test run behind them: 173 verified, 174 stale, 145 with no test run, 3 ending on a failing run. The argument does not change; with today's tool the headline figure is 65%.*
+
 I don't think the agent is lying. I think the workflow has no gate at the exact moment the claim is made, and a sentence is cheap.
 
 ## What a gate has to be
@@ -65,7 +67,7 @@ One thing I should say plainly: I did not write this tool. Claude did, under my 
 
 The first thing that agent needed, building anything at all, was a way to stop itself from claiming done. It runs isitdone on its own repository as a Stop hook and in CI. That is the most honest endorsement I can offer.
 
-It is not a lie detector and it is not security. An agent with permission to edit settings can remove any hook. isitdone guards the honest mistake, which in my transcripts was 69% of the claims.
+It is not a lie detector and it is not security. An agent with permission to edit settings can remove any hook. isitdone guards the honest mistake, which in my transcripts was about two thirds of the claims.
 
 ## Run it on your own history
 

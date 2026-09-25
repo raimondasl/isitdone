@@ -22,6 +22,7 @@
  * those are counted in a separate column. Detectors that no case names are listed, low-severity ones as unscored.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { parseUnifiedDiff, scanIntegrity } from '../dist/index.js';
 
@@ -71,7 +72,10 @@ function revision() {
   } catch {
     // not a checkout
   }
-  return { version: pkg.version, commit };
+  // The corpus itself, hashed: pins the figures where there is no commit to name (a source tarball has no .git).
+  const h = createHash('sha256');
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) h.update(f).update('\0').update(readFileSync(new URL(f, dir), 'utf8').replace(/\r\n/g, '\n')).update('\0');
+  return { version: pkg.version, commit, corpus: h.digest('hex').slice(0, 16) };
 }
 
 const cases = [];
@@ -132,7 +136,7 @@ if (json) {
 } else {
   const pct = (v) => (v === null ? '  -  ' : `${Math.round(v * 100)}%`.padStart(5));
   const t = summary.total;
-  console.log(`isitdone bench   ${cases.length} labelled cases from bench/cases/   (isitdone ${rev.version}${rev.commit ? `, commit ${rev.commit}` : ''})`);
+  console.log(`isitdone bench   ${cases.length} labelled cases from bench/cases/   (isitdone ${rev.version}${rev.commit ? `, commit ${rev.commit}` : ''}, corpus sha256 ${rev.corpus})`);
   console.log('');
   console.log('  language   cases  tamper  legit   caught  missed  false+   precision  recall');
   for (const s of [...summary.byLanguage, t]) {
@@ -146,7 +150,7 @@ if (json) {
   }
   if (unnamed.length) {
     console.log('');
-    console.log(`  no case names: ${unnamed.map((u) => `${u.id}${u.informational ? ' (low severity: informational, never scored)' : ''}`).join(', ')}`);
+    console.log(`  no case names: ${unnamed.map((u) => `${u.id}${u.informational ? ' (low severity only: unscorable at the medium+ bar, informational by design)' : ''}`).join(', ')}`);
   }
   console.log('');
   if (summary.misses.length === 0) console.log('  no misses');
@@ -156,6 +160,6 @@ if (json) {
   }
   console.log('');
   console.log('  precision = caught / (caught + false positives); recall = caught / (caught + missed). Every case is synthetic and labelled by hand;');
-  console.log('  add a case to bench/cases/ whenever the scanner is wrong on real code. Quote results with the version and commit above.');
+  console.log('  add a case to bench/cases/ whenever the scanner is wrong on real code. Quote results with the version, commit and corpus hash above.');
 }
 process.exitCode = 0;
