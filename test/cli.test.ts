@@ -238,6 +238,11 @@ describe('cli end-to-end', () => {
       expect(j.cursorSource).toBe('transcripts');
       expect(j.claims).toBeUndefined();
       expect(cli(['history', '--min', '100'], repo.root, undefined, env).code).toBe(0);
+      expect(r.stdout).toMatch(/VERIFIED\s+100%\s+\(2\)/);
+      expect(r.stdout).toMatch(/FAILED\s+0%\s+\(0\)/);
+      expect(r.stdout).toMatch(/0% of "done" claims had no passing test run/);
+      expect(cli(['history', '--until', '2026-08-31'], repo.root, undefined, env).stdout).toMatch(/until 2026-08-31[\s\S]*no completion claims found/);
+      expect(cli(['history', '--until', 'someday'], repo.root, undefined, env).code).toBe(3);
       expect(cli(['--help'], repo.root).stdout).toContain('Gemini CLI, Qwen Code and Cursor transcripts');
     } finally {
       rmSync(home, { recursive: true, force: true, maxRetries: 3 });

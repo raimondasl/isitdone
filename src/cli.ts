@@ -11,7 +11,7 @@ import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
 import { runMcpServer } from './mcp.js';
-import { styleFor } from './output.js';
+import { styleFor, share } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
 import { formatDetection, formatMarkdown, formatReceiptState, formatReport, formatReportMarkdown, integrityBlocks, receiptStateOf, toJson } from './report.js';
 import { isNewer, runUpdate } from './update.js';
@@ -52,6 +52,7 @@ Options for run
 
 Options for history  (reads Claude Code, Codex, Gemini CLI, Qwen Code and Cursor transcripts locally; nothing leaves the machine)
   --since <30d|2w|2026-01-01>   only sessions after this point
+  --until <2026-01-31>    only turns up to this point (a bare date includes the whole day, UTC)
   --exclude <substring>   skip projects whose path contains this (repeatable; also .isitdone.json history.exclude)
   --verbose               list every claim with its verdict
   --min <pct>             exit 1 if fewer than <pct>% of claims were verified
@@ -90,7 +91,7 @@ interface Args {
   rest: string[];
 }
 
-const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file']);
+const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'until', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file']);
 const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook', 'baseline']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
@@ -202,14 +203,7 @@ async function cmdRun(args: Args): Promise<number> {
   return res.ok && !integrityBlocks(res) ? 0 : 1;
 }
 
-function pct(n: number, total: number): string {
-  if (total === 0) return '-';
-  const v = Math.round((100 * n) / total);
-  // A bucket that holds anything never shows 0%, and one short of everything never shows 100%.
-  if (v === 0 && n > 0) return '<1%';
-  if (v === 100 && n < total) return '>99%';
-  return `${v}%`;
-}
+const pct = share;
 
 async function cmdHistory(args: Args): Promise<number> {
   const root = repoRoot(args.flags);
@@ -226,6 +220,13 @@ async function cmdHistory(args: Args): Promise<number> {
     err(`--since must look like 30d, 2w, 12h or an ISO date (got ${sinceRaw})`);
     return 3;
   }
+  const untilRaw = typeof args.flags.until === 'string' ? args.flags.until : null;
+  // A bare date means "through the end of that day"; anything else is the moment given.
+  const until = untilRaw ? (/^\d{4}-\d{2}-\d{2}$/.test(untilRaw.trim()) ? new Date(Date.parse(`${untilRaw.trim()}T23:59:59.999Z`)) : parseSince(untilRaw)) : null;
+  if (untilRaw && (!until || Number.isNaN(until.getTime()))) {
+    err(`--until must be an ISO date or time, or look like 30d, 2w, 12h (got ${untilRaw})`);
+    return 3;
+  }
   const min = typeof args.flags.min === 'string' ? Number(args.flags.min) : null;
   if (min !== null && !(min >= 0 && min <= 100)) {
     err('--min must be a percentage between 0 and 100');
@@ -236,6 +237,7 @@ async function cmdHistory(args: Args): Promise<number> {
   const live = !json && Boolean(process.stdout.isTTY);
   const report: HistoryReport = await scanHistory({
     since,
+    until,
     exclude: [...configExclude, ...flagExclude],
     includeSubagents: args.flags['include-subagents'] === true,
     onProgress: live ? (done, total) => process.stdout.write(`\r  scanning ${done}/${total} sessions ...`) : undefined,
@@ -246,7 +248,7 @@ async function cmdHistory(args: Args): Promise<number> {
   if (json) {
     out(JSON.stringify({ ...report, claims: args.flags.verbose === true ? report.claims : undefined }, null, 2));
   } else {
-    out(`${s.bold('isitdone history')}  ${s.dim(report.projectsDir)}${report.since ? s.dim(`  since ${report.since.slice(0, 10)}`) : ''}`);
+    out(`${s.bold('isitdone history')}  ${s.dim(report.projectsDir)}${report.since ? s.dim(`  since ${report.since.slice(0, 10)}`) : ''}${report.until ? s.dim(`  until ${report.until.slice(0, 10)}`) : ''}`);
     out(`  scanned ${report.scannedFiles} session${report.scannedFiles === 1 ? '' : 's'} in ${report.byProject.length || 'no'} project${report.byProject.length === 1 ? '' : 's'}; ${report.editTurns} turns edited files; ${total} of those ended with a completion claim${report.excludedDirs.length ? s.dim(`; ${report.excludedDirs.length} project dir${report.excludedDirs.length === 1 ? '' : 's'} excluded`) : ''}`);
     for (const [agent, a] of Object.entries(report.byAgent)) {
       if (a.sessions === 0) continue;
@@ -263,7 +265,7 @@ async function cmdHistory(args: Args): Promise<number> {
     out(`  ${s.red('FAILED')}     ${pad(pct(report.counts.FAILED, total), 5)} ${s.dim(pad(`(${report.counts.FAILED})`, 7))} the last test run failed, "done" claimed anyway`);
     out(`  ${s.red('NEVER RAN')}  ${pad(pct(report.counts.NEVER_RAN, total), 5)} ${s.dim(pad(`(${report.counts.NEVER_RAN})`, 7))} no test command in the turn at all`);
     out('');
-    out(`  ${s.bold(`${report.unbackedPct}% of "done" claims had no passing test run behind them.`)}`);
+    out(`  ${s.bold(`${pct(total - verified, total)} of "done" claims had no passing test run behind them.`)}`);
     const mixed = report.claims.filter((c) => c.verdict === 'VERIFIED' && c.testFails > 0).length;
     if (mixed > 0) out(`  ${s.yellow(`${mixed} of the verified claims had a failed test run earlier in the same turn; only the last command passed, and it may have been a narrower one (--verbose marks them).`)}`);
     const g = report.gate;
@@ -275,7 +277,7 @@ async function cmdHistory(args: Args): Promise<number> {
       out(`        ${s.dim('transcripts only show the tests the agent ran itself; the hook\'s own runs in these projects are counted here, not above')}`);
     }
     const worst = [...report.byProject].filter((p) => p.claims >= 5).sort((a, b) => b.unbackedPct - a.unbackedPct)[0];
-    if (worst) out(`  worst project  ${worst.project}  ${worst.unbackedPct}% unbacked (${worst.claims} claims)`);
+    if (worst) out(`  worst project  ${worst.project}  ${pct(worst.claims - worst.verified, worst.claims)} unbacked (${worst.claims - worst.verified} of ${worst.claims} claims)`);
     if (args.flags.verbose === true) {
       out('');
       for (const c of report.claims) out(`  ${pad(c.verdict, 9)} ${s.dim(c.at.slice(0, 10))}  ${s.dim(c.project)}  ${JSON.stringify(c.claim)}${c.lossy ? s.yellow('  (no exit codes)') : ''}${c.verdict === 'VERIFIED' && c.testFails > 0 ? s.yellow(`  (after ${c.testFails} failed run${c.testFails === 1 ? '' : 's'})`) : ''}`);

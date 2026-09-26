@@ -63,7 +63,7 @@ export class TurnTracker {
   private readonly turns: Array<{ claim: ClaimRecord | null; edited: boolean }> = [];
 
   constructor(
-    private readonly meta: { project: () => string; session: string; agent: ClaimRecord['agent']; sinceMs: number; lossy?: boolean },
+    private readonly meta: { project: () => string; session: string; agent: ClaimRecord['agent']; sinceMs: number; untilMs?: number; lossy?: boolean },
     private readonly out: ClaimRecord[],
     private readonly stats: TurnStats,
   ) {}
@@ -169,10 +169,14 @@ export class TurnTracker {
   finalize(): void {
     if (!this.active) return;
     let pushed: ClaimRecord | null = null;
-    if (this.edits > 0) this.stats.editTurns++;
+    // --since / --until: a turn belongs to the window by its last activity, for the edit-turn count and the claim alike.
+    const at = this.lastTextAt || this.lastEditAt;
+    const inWindow = (!this.meta.sinceMs || at >= this.meta.sinceMs) && (!this.meta.untilMs || (at > 0 && at <= this.meta.untilMs));
+    const counted = this.edits > 0 && inWindow;
+    if (counted) this.stats.editTurns++;
     if (this.edits > 0 || this.testRuns > 0) {
       const claim = findClaim(this.lastText);
-      if (claim && this.edits > 0 && !(this.meta.sinceMs && this.lastTextAt < this.meta.sinceMs)) {
+      if (claim && counted) {
         let verdict: Verdict;
         if (this.testRuns === 0 || !this.lastTest) verdict = 'NEVER_RAN';
         else if (!this.lastTest.ok) verdict = 'FAILED';
@@ -195,7 +199,7 @@ export class TurnTracker {
         this.out.push(pushed);
       }
     }
-    this.turns.push({ claim: pushed, edited: this.edits > 0 });
+    this.turns.push({ claim: pushed, edited: counted });
     this.active = false;
     this.edits = 0;
     this.lastEditAt = 0;

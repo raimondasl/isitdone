@@ -151,7 +151,7 @@ export interface CursorComposer {
 export interface CursorStore {
   path: string;
   composers(): CursorComposer[];
-  scan(c: CursorComposer, opts: { since?: Date | null }, label: string, out: ClaimRecord[], stats: TurnStats): void;
+  scan(c: CursorComposer, opts: { since?: Date | null; until?: Date | null }, label: string, out: ClaimRecord[], stats: TurnStats): void;
   close(): void;
 }
 
@@ -310,7 +310,7 @@ export function openCursorStore(userDir: string, opts: { sqlite?: SqliteModule |
       return list;
     },
     scan(c, opts2, label, out, stats): void {
-      const turn = new TurnTracker({ project: () => label, session: c.id, agent: 'cursor', sinceMs: opts2.since ? opts2.since.getTime() : 0 }, out, stats);
+      const turn = new TurnTracker({ project: () => label, session: c.id, agent: 'cursor', sinceMs: opts2.since ? opts2.since.getTime() : 0, untilMs: opts2.until ? opts2.until.getTime() : 0 }, out, stats);
       const rows = db.prepare('SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?').all(`bubbleId:${c.id}:`, `bubbleId:${c.id};`);
       const index = new Map<string, number>();
       c.order.forEach((bid, i) => index.set(bid, i));
@@ -399,10 +399,10 @@ export function transcriptComposerId(file: string): string {
  * The lossy JSONL transcript: {role, message:{content:[{type:'text'|'tool_use', ...}]}} per line, no tool results, no
  * timestamps. Lines are timed backwards from the file's mtime so ordering and `since` still work.
  */
-export function scanCursorTranscript(file: string, opts: { since?: Date | null }, label: string, out: ClaimRecord[], stats: TurnStats): void {
+export function scanCursorTranscript(file: string, opts: { since?: Date | null; until?: Date | null }, label: string, out: ClaimRecord[], stats: TurnStats): void {
   const lines = readFileSync(file, 'utf8').split(/\r?\n/);
   const mtime = statSync(file).mtimeMs;
-  const turn = new TurnTracker({ project: () => label, session: transcriptComposerId(file), agent: 'cursor', sinceMs: opts.since ? opts.since.getTime() : 0, lossy: true }, out, stats);
+  const turn = new TurnTracker({ project: () => label, session: transcriptComposerId(file), agent: 'cursor', sinceMs: opts.since ? opts.since.getTime() : 0, untilMs: opts.until ? opts.until.getTime() : 0, lossy: true }, out, stats);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] as string;
     if (!line.startsWith('{')) continue;

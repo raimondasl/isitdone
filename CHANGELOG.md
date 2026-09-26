@@ -4,9 +4,20 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-26
+
+### Added
+
+- `isitdone history --until <date>`: only turns whose last activity is at or before the point (a bare date includes the whole day, UTC); the decision-log section follows the same window. With `--since` it bounds any period, so a published figure can be reproduced later (the README example is `--until 2026-09-07`).
+
+### Fixed
+
+- The headline ("N% of done claims had no passing test run") and the worst-project line printed shares computed in history.ts that bypassed the rounding guard the table rows got in this release: with 495 claims and 2 verified the sentence would have printed 100% one line below a row reading under 1%. Both now go through the same `share()`, and the worst-project line prints its counts. Pointed out by the same reader on DEV.
+- With `--since`, "N turns edited files" counted turns from before the cut-off in files that were scanned; the edit-turn count now uses the same window as the claims.
+
 ### Changed
 
-- `isitdone history` prints the count beside every share (`FAILED  <1%  (3)`) and never rounds a row that holds anything to 0%, or a row short of everything to 100%: a reader adding up the rows could not tell which one absorbed the rounding, or whether the failing-run row held any claims at all.
+- `isitdone history` prints the count beside every share (`FAILED  1%  (3)`) and never rounds a row that holds anything to 0%, or a row short of everything to 100%: a reader adding up the rows could not tell which one absorbed the rounding, or whether the failing-run row held any claims at all.
 - `npm run bench` prints a sha256 of `bench/cases/*.json` next to the version and commit, so the figures are pinned where there is no git (a source tarball); the three low-severity detectors are described as unscorable at the medium+ bar.
 - README and docs/why.md: the author's 69% came from isitdone 0.2.0 on 2026-09-07; recounted with 0.8.0 over the same transcripts it is 65% (495 claims: 173 verified, 174 stale, 3 failed, 145 never ran). Both are now stated with their date and version, and the time span is given as claims dated 2026-06-20 to 2026-09-07 (the README said "seven months", which the transcripts do not support). Found while answering the same reader's follow-up on DEV.
 

@@ -279,11 +279,11 @@ export async function loadGeminiMessages(file: string): Promise<{ messages: Rec[
   return { messages: [...messages.values()], meta };
 }
 
-export async function scanGeminiSession(file: string, opts: { since?: Date | null; includeSubagents?: boolean }, label: string, out: ClaimRecord[], stats: TurnStats): Promise<void> {
+export async function scanGeminiSession(file: string, opts: { since?: Date | null; until?: Date | null; includeSubagents?: boolean }, label: string, out: ClaimRecord[], stats: TurnStats): Promise<void> {
   const { messages, meta } = await loadGeminiMessages(file);
   if (meta.kind === 'subagent' && !opts.includeSubagents) return;
   const session = basename(file).replace(/\.jsonl?$/, '');
-  const turn = new TurnTracker({ project: () => label, session, agent: 'gemini', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
+  const turn = new TurnTracker({ project: () => label, session, agent: 'gemini', sinceMs: opts.since ? opts.since.getTime() : 0, untilMs: opts.until ? opts.until.getTime() : 0 }, out, stats);
   for (const m of messages) {
     const at = ts(m.timestamp);
     if (m.type === 'user') {
@@ -318,10 +318,10 @@ export async function scanGeminiSession(file: string, opts: { since?: Date | nul
 /** Qwen user records that continue a turn rather than start one (mirrors the CLI's own resume logic). */
 const QWEN_NON_PROMPT = new Set(['goal_runtime', 'notification', 'cron', 'mid_turn_user_message', 'realtime_message']);
 
-export async function scanQwenSession(file: string, opts: { since?: Date | null; includeSubagents?: boolean }, project: { label: string; sawCwd: (cwd: string) => void }, out: ClaimRecord[], stats: TurnStats): Promise<void> {
+export async function scanQwenSession(file: string, opts: { since?: Date | null; until?: Date | null; includeSubagents?: boolean }, project: { label: string; sawCwd: (cwd: string) => void }, out: ClaimRecord[], stats: TurnStats): Promise<void> {
   const session = basename(file, '.jsonl');
   let cwd: string | null = null;
-  const turn = new TurnTracker({ project: () => cwd ?? project.label, session, agent: 'qwen', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
+  const turn = new TurnTracker({ project: () => cwd ?? project.label, session, agent: 'qwen', sinceMs: opts.since ? opts.since.getTime() : 0, untilMs: opts.until ? opts.until.getTime() : 0 }, out, stats);
   /** Edit tool calls awaiting their tool_result (call id -> tool name). */
   const edits = new Map<string, string>();
   const recs: Rec[] = [];

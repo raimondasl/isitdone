@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseSince, projectLabel, scanHistory } from '../src/history.js';
+import { share } from '../src/output.js';
 
 let dir: string | null = null;
 afterEach(() => {
@@ -127,5 +128,37 @@ describe('helpers', () => {
     expect(projectLabel('C--Users-me-work-app', null)).toBe('C:/Users/me/work/app');
     expect(projectLabel('-home-me-app', null)).toBe('/home/me/app');
     expect(projectLabel('x', '/real/path')).toBe('/real/path');
+  });
+});
+
+describe('history window', () => {
+  it('--until keeps only turns whose last activity is at or before the point, for claims and the edit-turn count alike', async () => {
+    setup();
+    const recs: Rec[] = [user('first'), edit(), bash('w1', 'npm test'), result('w1'), say('Done. All tests pass.')];
+    const cut = new Date(t + 30_000);
+    recs.push(user('second'), edit(), say('All done, ready for review.'));
+    session('C--work-app', 'w', recs);
+    const all = await scanHistory({ projectsDir: dir as string, codexDir: null, geminiDir: null, qwenDir: null, cursorDir: null, cursorUserDir: null });
+    expect(all.claims).toHaveLength(2);
+    expect(all.editTurns).toBe(2);
+    const early = await scanHistory({ projectsDir: dir as string, codexDir: null, geminiDir: null, qwenDir: null, cursorDir: null, cursorUserDir: null, until: cut });
+    expect(early.claims.map((c) => c.verdict)).toEqual(['VERIFIED']);
+    expect(early.editTurns).toBe(1);
+    expect(early.until).toBe(cut.toISOString());
+    const late = await scanHistory({ projectsDir: dir as string, codexDir: null, geminiDir: null, qwenDir: null, cursorDir: null, cursorUserDir: null, since: cut });
+    expect(late.claims.map((c) => c.verdict)).toEqual(['NEVER_RAN']);
+    expect(late.editTurns).toBe(1);
+  });
+});
+
+describe('share', () => {
+  it('never prints 0% for a row that holds something, or 100% for a row short of everything', () => {
+    expect(share(0, 516)).toBe('0%');
+    expect(share(2, 516)).toBe('<1%');
+    expect(share(3, 495)).toBe('1%');
+    expect(share(493, 495)).toBe('>99%');
+    expect(share(495, 495)).toBe('100%');
+    expect(share(322, 495)).toBe('65%');
+    expect(share(1, 0)).toBe('-');
   });
 });

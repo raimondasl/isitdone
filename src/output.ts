@@ -63,3 +63,15 @@ const ANSI_RE = new RegExp(`${ESC}\[[0-9;?]*[ -/]*[@-~]`, 'g');
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, '').replace(/\r(?!\n)/g, '\n');
 }
+
+/**
+ * n of total as a whole percentage, for tables a reader will add up: a share that holds anything never prints 0%, and
+ * one short of everything never prints 100% ("<1%", ">99%"). "-" for an empty total.
+ */
+export function share(n: number, total: number): string {
+  if (total === 0) return '-';
+  const v = Math.round((100 * n) / total);
+  if (v === 0 && n > 0) return '<1%';
+  if (v === 100 && n < total) return '>99%';
+  return `${v}%`;
+}

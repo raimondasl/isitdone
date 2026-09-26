@@ -63,6 +63,7 @@ export interface HistoryReport {
   /** Share of claims with no passing test run after the last edit. */
   unbackedPct: number;
   byProject: ProjectStats[];
+  until: string | null;
   /**
    * What the isitdone Stop hook itself decided in these projects (.isitdone/decisions.jsonl), or null when none has a
    * log. Transcripts only show the tests the agent ran; in a gated project the hook's own runs are counted here.
@@ -87,6 +88,8 @@ export interface HistoryOptions {
   /** false: never load node:sqlite, read Cursor's JSONL transcripts only (tests). */
   cursorSqlite?: boolean;
   since?: Date | null;
+  /** Only turns whose last activity is at or before this point. */
+  until?: Date | null;
   /** Case-insensitive substrings; a project directory or path containing one is skipped. */
   exclude?: string[];
   includeSubagents?: boolean;
@@ -101,12 +104,12 @@ export function projectLabel(slug: string, cwd: string | null): string {
   return slug.replace(/^([A-Za-z])--/, '$1:/').replace(/^-/, '/').replace(/-/g, '/');
 }
 
-export async function scanSession(file: string, opts: { includeSubagents?: boolean; since?: Date | null }, project: { label: string; sawCwd: (cwd: string) => void }, out: ClaimRecord[], stats: TurnStats): Promise<void> {
+export async function scanSession(file: string, opts: { includeSubagents?: boolean; since?: Date | null; until?: Date | null }, project: { label: string; sawCwd: (cwd: string) => void }, out: ClaimRecord[], stats: TurnStats): Promise<void> {
   const stream = createReadStream(file, { encoding: 'utf8' });
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
   const session = basename(file, '.jsonl');
   let cwd: string | null = null;
-  const turn = new TurnTracker({ project: () => cwd ?? project.label, session, agent: 'claude-code', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
+  const turn = new TurnTracker({ project: () => cwd ?? project.label, session, agent: 'claude-code', sinceMs: opts.since ? opts.since.getTime() : 0, untilMs: opts.until ? opts.until.getTime() : 0 }, out, stats);
 
   for await (const line of rl) {
     if (!line.startsWith('{')) continue;
@@ -194,6 +197,7 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
   const cursorUserDir = opts.cursorUserDir === undefined ? defaultCursorUserDir() : opts.cursorUserDir;
   const exclude = (opts.exclude ?? []).map((e) => e.toLowerCase()).filter(Boolean);
   const since = opts.since ?? null;
+  const until = opts.until ?? null;
   const report: HistoryReport = {
     projectsDir,
     codexDir,
@@ -215,6 +219,7 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
     byProject: [],
     gate: null,
     since: since ? since.toISOString() : null,
+    until: until ? until.toISOString() : null,
   };
   const excludedDirs = new Set<string>();
   /** True (and remembered for the report) when a project dir or label matches an exclusion. */
@@ -336,14 +341,14 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
     let lossy = false;
     try {
       if (item.kind === 'cursor-db') {
-        item.store.scan(item.composer, { since }, item.label, report.claims, stats);
-      } else if (agent === 'codex') await scanCodexSession(item.file, { since }, report.claims, stats);
-      else if (agent === 'gemini') await scanGeminiSession(item.file, { since, includeSubagents: opts.includeSubagents }, item.label, report.claims, stats);
+        item.store.scan(item.composer, { since, until }, item.label, report.claims, stats);
+      } else if (agent === 'codex') await scanCodexSession(item.file, { since, until }, report.claims, stats);
+      else if (agent === 'gemini') await scanGeminiSession(item.file, { since, until, includeSubagents: opts.includeSubagents }, item.label, report.claims, stats);
       else if (agent === 'qwen') {
         const key = `qwen:${item.slug}`;
-        await scanQwenSession(item.file, { since, includeSubagents: opts.includeSubagents }, { label: labels.get(key) ?? item.label, sawCwd: (cwd) => labels.set(key, cwd) }, report.claims, stats);
+        await scanQwenSession(item.file, { since, until, includeSubagents: opts.includeSubagents }, { label: labels.get(key) ?? item.label, sawCwd: (cwd) => labels.set(key, cwd) }, report.claims, stats);
       } else if (agent === 'cursor') {
-        scanCursorTranscript(item.file, { since }, item.label, report.claims, stats);
+        scanCursorTranscript(item.file, { since, until }, item.label, report.claims, stats);
         lossy = true;
       } else {
         const project = {
@@ -352,7 +357,7 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
             if (!labels.has(item.slug)) labels.set(item.slug, cwd);
           },
         };
-        await scanSession(item.file, { includeSubagents: opts.includeSubagents, since }, project, report.claims, stats);
+        await scanSession(item.file, { includeSubagents: opts.includeSubagents, since, until }, project, report.claims, stats);
       }
       report.scannedFiles++;
       report.sessions++;
@@ -415,7 +420,7 @@ export async function scanHistory(opts: HistoryOptions = {}): Promise<HistoryRep
       // unreadable: no log
     }
   }
-  const logs = [...roots].map((dir) => ({ dir, records: readDecisions(dir, since) })).filter((l) => l.records.length > 0);
+  const logs = [...roots].map((dir) => ({ dir, records: readDecisions(dir, since, until) })).filter((l) => l.records.length > 0);
   report.gate = logs.length ? { ...summarizeDecisions(logs.map((l) => l.records)), dirs: logs.map((l) => l.dir) } : null;
   return report;
 }

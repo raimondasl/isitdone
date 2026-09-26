@@ -177,10 +177,10 @@ async function readLines(file: string): Promise<AsyncIterable<string>> {
   })();
 }
 
-export async function scanCodexSession(file: string, opts: { since?: Date | null }, out: ClaimRecord[], stats: TurnStats): Promise<void> {
+export async function scanCodexSession(file: string, opts: { since?: Date | null; until?: Date | null }, out: ClaimRecord[], stats: TurnStats): Promise<void> {
   const session = basename(file).replace(/\.jsonl(?:\.zst)?$/, '');
   let cwd: string | null = null;
-  const turn = new TurnTracker({ project: () => cwd ?? 'codex', session, agent: 'codex', sinceMs: opts.since ? opts.since.getTime() : 0 }, out, stats);
+  const turn = new TurnTracker({ project: () => cwd ?? 'codex', session, agent: 'codex', sinceMs: opts.since ? opts.since.getTime() : 0, untilMs: opts.until ? opts.until.getTime() : 0 }, out, stats);
   let first = true;
   let sawTurnEvents = false;
   // Pre-v0.40 "v0" rollouts: a bare {id, timestamp, instructions} first line, then unwrapped ResponseItems with no

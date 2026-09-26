@@ -50,7 +50,7 @@ export function appendDecision(root: string, rec: GateRecord): void {
   }
 }
 
-export function readDecisions(root: string, since: Date | null = null): GateRecord[] {
+export function readDecisions(root: string, since: Date | null = null, until: Date | null = null): GateRecord[] {
   let text: string;
   try {
     text = readFileSync(join(root, RECEIPT_DIR, DECISIONS_FILE), 'utf8');
@@ -64,6 +64,7 @@ export function readDecisions(root: string, since: Date | null = null): GateReco
       const r = JSON.parse(line) as GateRecord;
       if (typeof r.t !== 'string' || typeof r.kind !== 'string') continue;
       if (since && Date.parse(r.t) < since.getTime()) continue;
+      if (until && Date.parse(r.t) > until.getTime()) continue;
       out.push(r);
     } catch {
       // a torn line
