@@ -4,6 +4,13 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-27
+
+### Changed
+
+- The `history` headline prints its count beside the share (`65% of "done" claims (322 of 495) had no passing test run behind them`), as the rows and the worst-project line already did. A rounded share alone is a bucket of several counts (65% of 495 is anything from 320 to 324); the count pins it. Pointed out by the same reader on DEV.
+- The README example shows the `--exclude` its run used (one private project, left out of every published figure) and says which lines were trimmed; the 0.2.0 "at most 2 claims" reading is tied to that version's rounding, since today a 0% row means none.
+
 ## [0.8.1] - 2026-09-26
 
 ### Added

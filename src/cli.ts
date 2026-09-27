@@ -265,7 +265,7 @@ async function cmdHistory(args: Args): Promise<number> {
     out(`  ${s.red('FAILED')}     ${pad(pct(report.counts.FAILED, total), 5)} ${s.dim(pad(`(${report.counts.FAILED})`, 7))} the last test run failed, "done" claimed anyway`);
     out(`  ${s.red('NEVER RAN')}  ${pad(pct(report.counts.NEVER_RAN, total), 5)} ${s.dim(pad(`(${report.counts.NEVER_RAN})`, 7))} no test command in the turn at all`);
     out('');
-    out(`  ${s.bold(`${pct(total - verified, total)} of "done" claims had no passing test run behind them.`)}`);
+    out(`  ${s.bold(`${pct(total - verified, total)} of "done" claims (${total - verified} of ${total}) had no passing test run behind them.`)}`);
     const mixed = report.claims.filter((c) => c.verdict === 'VERIFIED' && c.testFails > 0).length;
     if (mixed > 0) out(`  ${s.yellow(`${mixed} of the verified claims had a failed test run earlier in the same turn; only the last command passed, and it may have been a narrower one (--verbose marks them).`)}`);
     const g = report.gate;

@@ -76,9 +76,9 @@ Edit one more file and the receipt goes **STALE** until the checks run again. A 
 Measure it on your own machine. `isitdone history` reads the transcripts already on disk: Claude Code (`~/.claude/projects`), Codex CLI (`~/.codex/sessions`: legacy, paginated and pre-0.40 rollouts, honouring `/undo` rollbacks), Gemini CLI (`~/.gemini/tmp/<project>/chats`, both the `.json` and the 0.39+ `.jsonl` layouts), Qwen Code (`~/.qwen/projects/<cwd>/chats`) and Cursor (the IDE's `state.vscdb` bubble store, opened read-only in place, which needs Node 22.13+ or 24 for `node:sqlite`; on Node 20 the `agent-transcripts` JSONL is read instead, which carries no exit codes, and the report says so). It finds every turn where the agent edited files and then claimed completion, and checks whether a test command actually passed after the last edit. Nothing leaves your machine; only counts are printed.
 
 ```
-$ npx isitdone history --until 2026-09-07
+$ npx isitdone history --until 2026-09-07 --exclude <private project>
 isitdone history  ~/.claude/projects  until 2026-09-07
-  scanned 596 sessions in 6 projects; 1320 turns edited files; 495 of those ended with a completion claim
+  scanned 596 sessions in 6 projects; 1320 turns edited files; 495 of those ended with a completion claim; 1 project dir excluded
   claude-code  596 sessions  495 claims  35%   verified
 
   VERIFIED   35%   (173)   a test command passed after the last edit
@@ -86,11 +86,11 @@ isitdone history  ~/.claude/projects  until 2026-09-07
   FAILED     1%    (3)     the last test run failed, "done" claimed anyway
   NEVER RAN  29%   (145)   no test command in the turn at all
 
-  65% of "done" claims had no passing test run behind them.
+  65% of "done" claims (322 of 495) had no passing test run behind them.
   21 of the verified claims had a failed test run earlier in the same turn; only the last command passed, and it may have been a narrower one (--verbose marks them).
 ```
 
-That is the author's real result, printed by isitdone 0.8.1 on 2026-09-26 over the Claude Code sessions that were on disk before the gate went in: claims dated 2026-06-20 to 2026-09-07, which `--until 2026-09-07` reproduces. The first published figure came from isitdone 0.2.0 on 2026-09-07: 69% of 516 claims (31% verified, 37% stale, 31% never ran, and a failing-run row printed as 0%, which by its own rounding means at most 2 claims). Later versions detect claims and turns more strictly, over the same transcripts. `history` now prints the count beside every share and never rounds a row that holds anything to 0%. Post yours.
+That is the author's real result, printed by isitdone 0.8.2 on 2026-09-27 over the Claude Code sessions that were on disk before the gate went in: claims dated 2026-06-20 to 2026-09-07, which `--until 2026-09-07` reproduces. One private project is left out with `--exclude`, as it was in every published run; the only other edits are the home directory shortened to `~` and the per-project lines at the end dropped. The first published figure came from isitdone 0.2.0 on 2026-09-07: 69% of 516 claims (31% verified, 37% stale, 31% never ran, and a failing-run row printed as 0%; under 0.2.0's plain rounding that means at most 2 claims). Later versions detect claims and turns more strictly, over the same transcripts. Since 0.8.1 `history` prints the count beside every share (since 0.8.2 the headline too) and never rounds a row that holds anything to 0%, so a 0% row now means none. Post yours.
 
 Once the gate is installed, that measure alone undercounts: the verification happens inside the Stop hook, and a transcript does not show the hook's run as a test the agent ran. So the hook keeps a local log of its own decisions (`.isitdone/decisions.jsonl`: one line per stop with the outcome, whether the final message claimed completion, and check counts; no message text, no paths, the session id only hashed), and `history` adds what the gate did in the projects it scanned. The layout, with illustrative numbers:
 

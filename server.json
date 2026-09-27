@@ -8,13 +8,13 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/raimondasl/isitdone#readme",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@aivolution/isitdone",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
