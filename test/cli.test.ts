@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { FAIL, PASS, nodePkg, tempRepo, type TempRepo } from './helpers.js';
@@ -99,6 +99,79 @@ describe('cli end-to-end', () => {
     expect(cli(['hook'], repo.root, payload).code).toBe(3);
     // garbage stdin never breaks the agent
     expect(cli(['hook', '--host', 'codex'], repo.root, 'garbage').code).toBe(0);
+  });
+
+  it('pause: refused in an agent shell; pauses a repository or all; hook, run and doctor say so; resume ends it', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), '.gitignore': '.isitdone/\n' } });
+    const pauses = join(homedir(), '.isitdone', 'pauses');
+    // An empty npm cache, so the stale-copy check looks at nothing on the machine running the tests.
+    const cache = mkdtempSync(join(tmpdir(), 'isitdone-npmcache-'));
+    // Through process.env, which is case-insensitive on Windows: npm may have set NPM_CONFIG_CACHE for this run.
+    const prevCache = process.env.npm_config_cache;
+    process.env.npm_config_cache = cache;
+    const env = {};
+    const outside = mkdtempSync(join(tmpdir(), 'isitdone-nogit-'));
+    try {
+      for (const marker of [{ CLAUDECODE: '1' }, { CLAUDECODE: '' }, { CURSOR_AGENT: '1' }] as Array<Record<string, string>>) {
+        const agent = cli(['pause'], repo.root, undefined, { ...env, ...marker });
+        expect(agent.code).toBe(3);
+        expect(agent.stderr).toMatch(/the user's switch, and this shell looks like one an agent host started.*If you are the agent: ask the user/);
+        expect(agent.stderr).not.toMatch(/CLAUDECODE|CURSOR_AGENT/);
+      }
+      expect(existsSync(pauses)).toBe(false);
+      for (const bad of [['--for', '40d'], ['--until', '2020-01-01'], ['--for', '2h', '--until', '2099-01-01'], ['--for', 'soon'], ['--for'], ['--until', 'friday'], ['--until', '2026-02-30'], ['3h'], ['--until', '2099-10-21', '08:00'], ['--global', '8h'], ['--cwd', join(outside, 'nope')]]) {
+        const r = cli(['pause', ...bad], repo.root, undefined, env);
+        expect(r.code, bad.join(' ')).toBe(3);
+      }
+      expect(cli(['pause', '3h'], repo.root, undefined, env).stderr).toMatch(/unexpected argument "3h" \(a length goes after --for/);
+      expect(existsSync(pauses)).toBe(false);
+      expect(cli(['pause'], outside, undefined, env).stderr).toMatch(/not inside a git repository; add --global/);
+
+      const p = cli(['pause', '--for', '2h'], repo.root, undefined, env);
+      expect(p.code).toBe(0);
+      expect(p.stdout).toMatch(/isitdone paused {2}in this repository until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC.* \(2 h from now\) {2}.* and its worktrees/);
+      expect(p.stdout).toMatch(/Hooks running isitdone 0\.9\.0 or later pick it up at their next stop/);
+      expect(readdirSync(pauses).filter((f) => f.startsWith('repo-'))).toHaveLength(1);
+      expect(existsSync(join(repo.root, '.isitdone'))).toBe(false);
+      const stop = JSON.stringify({ session_id: 's', cwd: repo.root, hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'Done, all tests pass.' });
+      const hook = cli(['hook', '--host', 'claude'], repo.root, stop);
+      expect(hook.code).toBe(0);
+      expect(JSON.parse(hook.stdout).systemMessage).toMatch(/^isitdone is paused in this repository/);
+      // By hand, the checks still run.
+      const run = cli([], repo.root);
+      expect(run.code).toBe(1);
+      expect(run.stdout).toMatch(/note: the Stop hook is paused in this repository/);
+      const doc = cli(['doctor', '--no-probe', '--no-baseline', '--no-latest'], repo.root);
+      expect(doc.stdout).toMatch(/i\s+note:pause\s+the Stop hook is paused in this repository/);
+      const resumed = JSON.parse(cli(['resume', '--json'], repo.root).stdout);
+      expect(resumed).toMatchObject({ resumed: { scope: 'repo' }, stillPaused: null });
+      expect(JSON.parse(cli(['hook', '--host', 'claude'], repo.root, stop).stdout).decision).toBe('block');
+      expect(cli(['resume'], repo.root).stdout).toMatch(/no pause for this repository was in force/);
+
+      const g = cli(['pause', '--global', '--until', new Date(Date.now() + 3 * 3_600_000).toISOString()], outside, undefined, env);
+      expect(g.code).toBe(0);
+      expect(g.stdout).toMatch(/isitdone paused {2}for every repository of this user until/);
+      expect(JSON.parse(cli(['hook', '--host', 'claude'], repo.root, stop).stdout).systemMessage).toMatch(/^isitdone is paused for every repository of this user.*resume --global/);
+      expect(cli(['resume'], repo.root).stdout).toMatch(/no pause for this repository was in force[\s\S]*still paused for every repository of this user/);
+      expect(cli(['resume'], outside).code).toBe(3);
+      expect(cli(['resume', '--global'], outside).stdout).toMatch(/isitdone resumed {2}the user-wide pause is over/);
+      expect(existsSync(join(pauses, 'global.json'))).toBe(false);
+
+      // A copy of isitdone that predates pauses, cached by npx: pause says the hook may not see it yet.
+      const old = join(cache, '_npx', 'abc123');
+      mkdirSync(join(old, 'node_modules', '@aivolution', 'isitdone'), { recursive: true });
+      writeFileSync(join(old, 'package.json'), JSON.stringify({ dependencies: { '@aivolution/isitdone': '^0.8.2' } }));
+      writeFileSync(join(old, 'node_modules', '@aivolution', 'isitdone', 'package.json'), JSON.stringify({ name: '@aivolution/isitdone', version: '0.8.2' }));
+      const stale = cli(['pause', '--for', '30m'], repo.root, undefined, env);
+      expect(stale.stdout).toMatch(/not in force yet: npx has isitdone 0\.8\.2 cached.*npx isitdone update/);
+      expect(stale.stdout).not.toMatch(/pick it up at their next stop/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true, maxRetries: 3 });
+      if (prevCache === undefined) delete process.env.npm_config_cache;
+      else process.env.npm_config_cache = prevCache;
+      rmSync(cache, { recursive: true, force: true, maxRetries: 3 });
+      rmSync(pauses, { recursive: true, force: true });
+    }
   });
 
   it('init + doctor: installs the hook, proves it blocks, and uninstalls', () => {

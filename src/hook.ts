@@ -10,6 +10,7 @@ import { appendDecision, type GateKind } from './gatelog.js';
 import { dirtyPathSet, findRoot, gitTopLevel, RECEIPT_DIR, trackedPaths } from './git.js';
 import { getHost, type HookInput, type HostAdapter, type HostName } from './hosts.js';
 import { DEFAULT_HOOK_TIMEOUT_S, HOOK_MARGIN_S } from './init.js';
+import { activePause, describePause, pauseLookup, type ActivePause } from './pause.js';
 import { ensureStateDir } from './receipt.js';
 import { formatBlockReason, integrityBlocks, type OtherSessionNote } from './report.js';
 import { attribute, compactEdits, formatAgo, lastEditAt, LOCK_WAIT_MS, mentionContext, mentions, pruneSessions, recordEdits, recordPass, sessionKey, SESSIONS_DIR, type Attribution } from './sessions.js';
@@ -159,6 +160,8 @@ function truncate(s: string, max: number): string {
 
 /** On hosts that do not flag a continuation, how long a "told about the other session" block stays good for a release. */
 const TOLD_MAX_AGE_MS = 10 * 60 * 1000;
+/** How often a running check is interrupted to look for a pause that started meanwhile. */
+const PAUSE_POLL_MS = 3000;
 /** Check output kept per check for working out whose files a failure names. */
 const MAX_ATTRIBUTION_CHARS = 1024 * 1024;
 
@@ -183,7 +186,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
       attempts: outcome.attempts,
       checks: r ? (r.cached ? (r.receipt?.checks.length ?? 0) : r.ran.length) : 0,
       failed: r ? r.ran.filter((x) => x.status !== 'PASS').length : 0,
-    });
+    }, { create: outcome.kind !== 'user-paused' });
   }
   return outcome;
 }
@@ -244,6 +247,30 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
   const continuation = isContinuation(input, prev);
   let attempts = continuation && prev ? prev.attempts : 0;
 
+  // The user paused the gate (`isitdone pause`): nothing runs. Read at every stop and polled while the checks run (below),
+  // so a pause reaches sessions that are already running. Doctor's probe ignores pauses: it proves the hook can block.
+  const pauses = doctor ? null : pauseLookup(topLevel ?? root);
+  const pausedStop = (pause: ActivePause, stoppedRun: boolean): HookOutcome => {
+    log.claim = input.lastMessage === null ? null : resolveProfile(config, input, opts.profile).claim !== null;
+    log.profile = null;
+    const cutShort = attempts > 0;
+    // The turn ends here. Hosts that infer a continuation from the attempt count need it reset; nothing else is written
+    // into the project while paused.
+    if (prev && prev.attempts > 0) writeState(root, { ...prev, attempts: 0, softBlocks: 0, loopCount: input.loopCount, turnId: input.turnId, updatedAt: new Date().toISOString() });
+    const on = `\`npx isitdone resume${pause.scope === 'global' ? ' --global' : ''}\` turns the gate back on.`;
+    const message = stoppedRun
+      ? `isitdone was paused ${describePause(pause)} while its checks were running; they were stopped, and this stop was not checked. ${on}`
+      : cutShort
+        ? `isitdone had blocked this turn ${attempts} time${attempts === 1 ? '' : 's'} because checks failed; it is paused ${describePause(pause)}, so the agent was let stop with them unfixed. ${on}`
+        : `isitdone is paused ${describePause(pause)}; this stop was not checked. ${on}`;
+    // Not quiet where it matters: a stop that claims to be done (or might, when the host does not pass the final
+    // message), a block cut short and a run stopped midway are always reported. A progress stop is not.
+    const tell = stoppedRun || cutShort || log.claim !== false;
+    return allow(`paused by the user ${describePause(pause)}${stoppedRun ? '; the checks were stopped mid-run' : ''}`, tell ? message : undefined, null, cutShort ? attempts : 0, 'user-paused');
+  };
+  const pausedNow = pauses ? activePause(pauses()) : null;
+  if (pausedNow) return pausedStop(pausedNow, false);
+
   if (continuation && attempts >= maxAttempts) {
     // Record this stop so the next one (same loop_count on Cursor) counts as a new turn. Hosts without a flag start
     // counting again: the turn ends with this allow, so their next stop can only follow a new prompt.
@@ -276,6 +303,7 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
   // (verify takes the lock after its cache check). The wait fits inside the hook timeout that init registered, which
   // is sized from the same budget.
   const output = new Map<string, string>();
+  const pauseWatch = new AbortController();
   const runVerify = (useCache: boolean) => verify({
     root,
     config,
@@ -295,16 +323,36 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
             return Math.min(LOCK_WAIT_MS, Math.max(10, slack) * 1000);
           },
     onOutput: doctor ? undefined : (check, chunk) => output.set(check.id, ((output.get(check.id) ?? '') + chunk).slice(-MAX_ATTRIBUTION_CHARS)),
+    signal: pauseWatch.signal,
   });
-  let result = await runVerify(!doctor);
-  if (result.cached && result.receipt && top !== null) {
-    // A receipt is bound to the tree after its run. When that run was another session's, this session's last edit may
-    // have landed while the checks were already reading the files: a PASS from before this session's latest recorded
-    // edit proves nothing about it, so the checks run again.
-    const r = result.receipt;
-    const ranFrom = r.startedAt ? Date.parse(r.startedAt) : Date.parse(r.createdAt) - r.checks.reduce((n, c) => n + c.durationMs, 0) - 1000;
-    if (lastEditAt([top, root], host.name, input.sessionId) >= ranFrom) result = await runVerify(false);
+  // A pause that starts while the checks run (or wait for another run) stops them: the machine is to go quiet now, not
+  // after the suite. A stopped run writes no receipt.
+  let pausedMidRun: ActivePause | null = null;
+  const poll = pauses
+    ? setInterval(() => {
+        const p = activePause(pauses());
+        if (p) {
+          pausedMidRun = p;
+          pauseWatch.abort();
+        }
+      }, PAUSE_POLL_MS)
+    : null;
+  poll?.unref();
+  let result: VerifyResult;
+  try {
+    result = await runVerify(!doctor);
+    if (result.cached && result.receipt && top !== null && !pauseWatch.signal.aborted) {
+      // A receipt is bound to the tree after its run. When that run was another session's, this session's last edit may
+      // have landed while the checks were already reading the files: a PASS from before this session's latest recorded
+      // edit proves nothing about it, so the checks run again.
+      const r = result.receipt;
+      const ranFrom = r.startedAt ? Date.parse(r.startedAt) : Date.parse(r.createdAt) - r.checks.reduce((n, c) => n + c.durationMs, 0) - 1000;
+      if (lastEditAt([top, root], host.name, input.sessionId) >= ranFrom) result = await runVerify(false);
+    }
+  } finally {
+    if (poll) clearInterval(poll);
   }
+  if (pausedMidRun && !result.ok) return pausedStop(pausedMidRun, true);
   // "Passed" for other sessions' purposes means the whole tree was proved: a pause that ran only lite checks, or
   // nothing, leaves this session's files as unfinished as they were. Stamped with the start of the run, so an edit
   // recorded while the checks ran does not count as covered.
@@ -353,6 +401,10 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
     const kind: GateKind = view.cached ? 'passed-cached' : view.ran.length === 0 ? 'no-checks' : profile === 'full' ? 'passed' : 'passed-lite';
     return allow(`${view.cached ? 'cached PASS' : profile === 'full' ? 'all checks passed' : 'lite checks passed'} (${why})`, warn, view, 0, kind);
   }
+
+  // A pause that came after the run (or just before the first poll) still counts: the user does not want this stop held.
+  const pausedLate = pauses ? activePause(pauses()) : null;
+  if (pausedLate) return pausedStop(pausedLate, false);
 
   const failedCount = view.ran.filter((r) => r.status !== 'PASS').length;
   // With another session at work, is this failure this session's? Yes when the output names a file it edited, when

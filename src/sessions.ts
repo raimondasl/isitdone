@@ -427,7 +427,7 @@ export interface RunLock {
  * seconds), not a pid: pids are recycled within seconds on Windows and mean nothing across containers. While waiting
  * the caller holds nothing, so there is no deadlock; when the wait runs out the run simply proceeds as before.
  */
-export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS, onWait?: () => void): Promise<RunLock> {
+export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS, onWait?: () => void, signal?: AbortSignal): Promise<RunLock> {
   const started = performance.now(); // monotonic: a clock step must not stretch the wait past the hook's timeout
   const waited = () => Math.round(performance.now() - started);
   let tookOver = false;
@@ -489,7 +489,7 @@ export async function acquireRunLock(root: string, waitMs = LOCK_WAIT_MS, onWait
     } catch {
       // it vanished or cannot be read: the next round tries to take it
     }
-    if (waited() >= waitMs) return none();
+    if (waited() >= waitMs || signal?.aborted) return none();
     if (!told) {
       told = true;
       onWait?.();

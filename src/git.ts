@@ -47,6 +47,18 @@ function out(args: string[], cwd: string): string | null {
   return r.ok ? r.stdout : null;
 }
 
+/** The repository's shared git directory: the same for the main checkout and every linked worktree. */
+export function gitCommonDir(cwd: string): string | null {
+  const d = out(['rev-parse', '--git-common-dir'], cwd);
+  if (!d) return null;
+  const abs = resolve(cwd, d);
+  try {
+    return realpathSync.native(abs);
+  } catch {
+    return abs;
+  }
+}
+
 export function gitTopLevel(cwd: string): string | null {
   const top = out(['rev-parse', '--show-toplevel'], cwd);
   if (!top) return null;

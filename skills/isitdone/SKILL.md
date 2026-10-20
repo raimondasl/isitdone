@@ -47,6 +47,7 @@ Paste that table into your completion message or the PR description.
 - Never state that tests pass unless `isitdone` (or the equivalent real command) ran on the current tree and returned `DONE`.
 - If the checks take too long or time out, report that honestly rather than assuming success.
 - `isitdone` is also installed as a Stop hook in many repositories. If your turn is blocked with a message beginning `isitdone: NOT DONE`, treat that message as the ground truth, fix the failures, and only then finish.
+- Pausing the hook (`npx isitdone pause`) is the user's decision, made in the user's own terminal; the command refuses to run in shells it recognises as an agent's. If the user wants the gate off for a while, tell them that command. Do not try to pause, disable or get around the gate yourself.
 
 ## Options you may need
 

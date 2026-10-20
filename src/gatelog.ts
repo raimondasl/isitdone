@@ -5,7 +5,7 @@
  * with the rest of `.isitdone/`): no message text, no paths, the session id only as the same hash the state files use.
  * Writing never throws and never delays the decision it records.
  */
-import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RECEIPT_DIR } from './git.js';
 import { ensureStateDir } from './receipt.js';
@@ -19,8 +19,9 @@ const MAX_BYTES = 512 * 1024;
  * blocked: the stop was refused. gave-up: blocked maxAttempts times, allowed with a warning. released: allowed after
  * one block because the failure named only another session's files. unenforced: failed, but state could not be kept.
  * no-checks: nothing detected to run. paused: background tasks and no claim. error: a broken config.
+ * user-paused: the user paused the gate (`isitdone pause`); allowed without running anything.
  */
-export type GateKind = 'passed' | 'passed-lite' | 'passed-cached' | 'blocked' | 'gave-up' | 'released' | 'unenforced' | 'no-checks' | 'paused' | 'error';
+export type GateKind = 'passed' | 'passed-lite' | 'passed-cached' | 'blocked' | 'gave-up' | 'released' | 'unenforced' | 'no-checks' | 'paused' | 'user-paused' | 'error';
 
 export interface GateRecord {
   t: string;
@@ -37,8 +38,10 @@ export interface GateRecord {
   failed: number;
 }
 
-export function appendDecision(root: string, rec: GateRecord): void {
+/** With `create: false` the record is written only where .isitdone/ already exists (a paused stop adds nothing new to a project). */
+export function appendDecision(root: string, rec: GateRecord, opts: { create?: boolean } = {}): void {
   try {
+    if (opts.create === false && !existsSync(join(root, RECEIPT_DIR))) return;
     const file = join(ensureStateDir(root), DECISIONS_FILE);
     appendFileSync(file, JSON.stringify(rec) + '\n');
     if (statSync(file).size > MAX_BYTES) {
@@ -88,6 +91,9 @@ export interface GateSummary {
   /** Stops whose final message claimed completion, and how many of those were blocked. */
   claims: number;
   claimsBlocked: number;
+  /** Stops let through unchecked because the gate was paused, and how many of them ended a blocked turn. */
+  pausedStops: number;
+  pausedTurns: number;
   other: number;
 }
 
@@ -95,7 +101,7 @@ const PASSED = new Set<GateKind>(['passed', 'passed-lite', 'passed-cached']);
 
 /** Fold decision records (any order, any number of projects) into turns and counts. */
 export function summarizeDecisions(byProject: GateRecord[][]): GateSummary {
-  const s: GateSummary = { projects: 0, checked: 0, passed: 0, blockedTurns: 0, fixed: 0, gaveUp: 0, released: 0, open: 0, claims: 0, claimsBlocked: 0, other: 0 };
+  const s: GateSummary = { projects: 0, checked: 0, passed: 0, blockedTurns: 0, fixed: 0, gaveUp: 0, released: 0, open: 0, claims: 0, claimsBlocked: 0, pausedStops: 0, pausedTurns: 0, other: 0 };
   for (const records of byProject) {
     if (records.length === 0) continue;
     s.projects++;
@@ -111,7 +117,9 @@ export function summarizeDecisions(byProject: GateRecord[][]): GateSummary {
       for (const r of list) {
         if (PASSED.has(r.kind) || r.kind === 'blocked') s.checked++;
         if (PASSED.has(r.kind)) s.passed++;
-        if (r.claim === true) {
+        // A paused stop was never looked at: it is counted on its own, not among the claims the gate weighed.
+        if (r.kind === 'user-paused') s.pausedStops++;
+        else if (r.claim === true) {
           s.claims++;
           if (r.kind === 'blocked') s.claimsBlocked++;
         }
@@ -124,6 +132,7 @@ export function summarizeDecisions(byProject: GateRecord[][]): GateSummary {
           if (PASSED.has(r.kind)) s.fixed++;
           else if (r.kind === 'gave-up' || r.kind === 'unenforced') s.gaveUp++;
           else if (r.kind === 'released') s.released++;
+          else if (r.kind === 'user-paused') s.pausedTurns++;
           else s.other++;
           inBlockedTurn = false;
         }

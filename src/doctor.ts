@@ -7,6 +7,7 @@ import { gitInfo } from './git.js';
 import { installedHooks } from './init.js';
 import { HOST_NAMES, type HostAdapter } from './hosts.js';
 import { formatDuration } from './output.js';
+import { activePause, describePause, pauseFiles } from './pause.js';
 import { childEnv, killTree, type RunResult } from './run.js';
 import { LOCK_WAIT_MS } from './sessions.js';
 import { isNewer, latestVersion } from './update.js';
@@ -24,6 +25,8 @@ export interface DoctorCheck {
 export interface DoctorReport {
   ok: boolean;
   checks: DoctorCheck[];
+  /** A pause in force here (`isitdone pause`): deliberate, so not a failure, but the gate is off until then. */
+  paused: { scope: 'repo' | 'global'; until: string; file: string } | null;
 }
 
 export interface DoctorOptions {
@@ -142,6 +145,10 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
     checks.push({ name: 'git', ok: true, detail: `${git.branch ?? 'detached'}@${git.headShort ?? 'no commits'}, ${git.dirtyFiles} dirty file(s), tree ${git.tree.slice(0, 7)}` });
   }
 
+  // A pause is deliberate, so it is not a failure; but while it lasts the gate is not doing its job here, and doctor says so.
+  const pause = activePause(pauseFiles(git.isRepo ? git.root : root));
+  if (pause) checks.push({ name: 'note:pause', ok: true, detail: `the Stop hook is paused ${describePause(pause)}: agents' stops go through without running the checks (${pause.file}); \`npx isitdone resume${pause.scope === 'global' ? ' --global' : ''}\` ends it` });
+
   // config + detection
   let config: IsitdoneConfig = {};
   let configSource: string | null = null;
@@ -254,5 +261,5 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
     }
   }
 
-  return { ok: checks.every((c) => c.ok), checks };
+  return { ok: checks.every((c) => c.ok), checks, paused: pause ? { scope: pause.scope, until: pause.until, file: pause.file } : null };
 }

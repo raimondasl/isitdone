@@ -1,20 +1,23 @@
-import { writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { loadConfig } from './config.js';
 import { toSarif } from './sarif.js';
 import { detectChecks } from './detect.js';
 import { doctor } from './doctor.js';
-import { dirtyPathSet, findRoot, gitInfo } from './git.js';
+import { dirtyPathSet, findRoot, gitInfo, gitTopLevel } from './git.js';
+import { activePause, clearPause, DEFAULT_PAUSE_MS, describePause, formatPauseTime, isAgentShell, MAX_PAUSE_MS, parseDuration, parseUntil, pauseFiles, writePause, type ActivePause } from './pause.js';
 import { readStdin, runEditHook, runHook } from './hook.js';
 import { liveSessionsNote, LOCK_WAIT_MS } from './sessions.js';
-import { ensureGitignore, init, PACKAGE_NAME } from './init.js';
+import { ensureGitignore, init, installedHooks, PACKAGE_NAME } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
 import { runMcpServer } from './mcp.js';
 import { styleFor, share } from './output.js';
 import { configHash, evaluateReceipt } from './receipt.js';
 import { formatDetection, formatMarkdown, formatReceiptState, formatReport, formatReportMarkdown, integrityBlocks, receiptStateOf, toJson } from './report.js';
-import { isNewer, runUpdate } from './update.js';
+import { findNpxEntries, isNewer, npmCacheDir, runUpdate } from './update.js';
+import { tryReadJsonFile } from './fsutil.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
 
@@ -32,6 +35,8 @@ Usage
   ${NPX} hook --host <name>   (used by the agent) read the Stop payload on stdin, block if needed;
                           <name> is one of ${HOST_NAMES.join(', ')}
   ${NPX} uninstall            remove the hook(s)
+  ${NPX} pause                (you, not the agent) let every stop through unchecked for a while, then switch back on
+  ${NPX} resume               end this repository's pause early (--global: the user-wide one)
   ${NPX} history              how many of your agent's past "done" claims had a test run behind them
   ${NPX} update               refresh the npx-cached hook to the latest release (--check only reports)
   ${NPX} mcp                  (used by the IDE) Model Context Protocol server on stdio, for agents without a stop hook:
@@ -73,6 +78,11 @@ Options for init
   --no-baseline           skip running the detected checks once on the current tree (doctor accepts it too)
   --json                  machine-readable output
 
+Options for pause  (the Stop hook only, in this repository and its worktrees; running sessions pick it up at their next stop)
+  --for <30m|2h|3d|1w>    how long (default 1h, at most 30 days; m is minutes here)
+  --until <time>          2026-11-02 (end of that day), 2026-11-02T11:00 (local time) or 2026-11-02T11:00Z
+  --global                every repository of this user (this home directory), not just this one
+
 Options for receipt
   --md                    markdown table for a PR body
   --json                  machine-readable
@@ -91,8 +101,8 @@ interface Args {
   rest: string[];
 }
 
-const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'until', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file']);
-const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook', 'baseline']);
+const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'until', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file', 'for']);
+const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook', 'baseline', 'global']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
 
@@ -199,6 +209,8 @@ async function cmdRun(args: Args): Promise<number> {
     // The CLI cannot know which session is asking; on a failure it says who edited what, so nobody fixes the other's files.
     const sessions = !res.ok && res.git.isRepo && config.otherSessions !== 'ignore' ? liveSessionsNote([res.git.root, root], () => dirtyPathSet(res.git.root)) : null;
     if (sessions) out(s.yellow(sessions));
+    const pause = activePause(pauseFiles(res.git.isRepo ? res.git.root : root));
+    if (pause) out(s.yellow(`note: the Stop hook is paused ${describePause(pause)}: agents' stops go through unchecked until then (\`${NPX} resume\` ends it)`));
   }
   return res.ok && !integrityBlocks(res) ? 0 : 1;
 }
@@ -272,8 +284,9 @@ async function cmdHistory(args: Args): Promise<number> {
     if (g) {
       out('');
       out(`  ${s.bold('gate')}  the isitdone Stop hook decided ${g.checked} stop${g.checked === 1 ? '' : 's'} in ${g.projects} project${g.projects === 1 ? '' : 's'} ${s.dim('(.isitdone/decisions.jsonl)')}`);
-      out(`        ${g.passed} passed; ${g.blockedTurns} turn${g.blockedTurns === 1 ? '' : 's'} blocked: ${g.fixed} fixed and then passed, ${g.gaveUp} gave up after the cap, ${g.released} released${g.open ? `, ${g.open} still open` : ''}`);
+      out(`        ${g.passed} passed; ${g.blockedTurns} turn${g.blockedTurns === 1 ? '' : 's'} blocked: ${g.fixed} fixed and then passed, ${g.gaveUp} gave up after the cap, ${g.released} released${g.pausedTurns ? `, ${g.pausedTurns} let go by a pause` : ''}${g.open ? `, ${g.open} still open` : ''}`);
       if (g.claims) out(`        ${g.claims} stop${g.claims === 1 ? '' : 's'} claimed done; ${g.claimsBlocked} of them ${g.claimsBlocked === 1 ? 'was' : 'were'} refused (${pct(g.claimsBlocked, g.claims)})`);
+      if (g.pausedStops) out(`        ${g.pausedStops} stop${g.pausedStops === 1 ? ' was' : 's were'} let through unchecked while the gate was paused (\`isitdone pause\`)`);
       out(`        ${s.dim('transcripts only show the tests the agent ran itself; the hook\'s own runs in these projects are counted here, not above')}`);
     }
     const worst = [...report.byProject].filter((p) => p.claims >= 5).sort((a, b) => b.unbackedPct - a.unbackedPct)[0];
@@ -457,8 +470,187 @@ async function cmdDoctor(args: Args): Promise<number> {
     if (c.hint && !c.ok) out(`  ${' '.repeat(2)} ${s.dim('-> ' + c.hint)}`);
   }
   out('');
-  out(report.ok ? `  ${s.green(s.bold('OK'))}   the agent cannot claim done with failing checks in this repo` : `  ${s.yellow(s.bold('ATTENTION'))}   fix the items marked !! above`);
+  if (!report.ok) out(`  ${s.yellow(s.bold('ATTENTION'))}   fix the items marked !! above`);
+  else if (report.paused) out(`  ${s.yellow(s.bold('PAUSED'))}   the hook works, but lets every stop through until ${formatPauseTime(Date.parse(report.paused.until))} (\`${NPX} resume${report.paused.scope === 'global' ? ' --global' : ''}\` ends it)`);
+  else out(`  ${s.green(s.bold('OK'))}   the agent cannot claim done with failing checks in this repo`);
   return report.ok ? 0 : 1;
+}
+
+/** The first release whose hook reads pauses; a hook that runs an older copy ignores them. */
+const PAUSE_SINCE = '0.9.0';
+
+function pauseCwd(flags: Args['flags']): string | null {
+  const cwd = typeof flags.cwd === 'string' ? resolve(flags.cwd) : process.cwd();
+  return existsSync(cwd) ? cwd : null;
+}
+
+/** hooks.json files under Claude Code's plugin folder that pin a version of isitdone (the plugin's hooks do). Bounded walk. */
+function pinnedPluginHooks(dir: string): Array<[string, string]> {
+  const found: Array<[string, string]> = [];
+  let budget = 5000;
+  const walk = (d: string, depth: number): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (--budget < 0) return;
+      const p = join(d, e.name);
+      if (e.isDirectory() && depth < 7 && e.name !== 'node_modules' && e.name !== '.git') walk(p, depth + 1);
+      else if (e.isFile() && e.name === 'hooks.json') {
+        const pinned = /@aivolution\/isitdone@(\d+\.\d+\.\d+)/.exec(readFileSync(p, 'utf8'))?.[1];
+        if (pinned) found.push([p, pinned]);
+      }
+    }
+  };
+  walk(dir, 0);
+  return found;
+}
+
+/** Copies of isitdone that a hook may run and that would not see a pause: older npx-cached, pinned or installed ones. */
+function stalePauseReaders(cwd: string, top: string | null): string[] {
+  const found: string[] = [];
+  try {
+    const cache = npmCacheDir();
+    const old = new Set<string>();
+    for (const dir of cache ? findNpxEntries(cache) : []) {
+      const v = tryReadJsonFile<{ version?: string }>(join(dir, 'node_modules', '@aivolution', 'isitdone', 'package.json'))?.version;
+      if (typeof v === 'string' && isNewer(PAUSE_SINCE, v)) old.add(v);
+    }
+    if (old.size) found.push(`npx has isitdone ${[...old].join(', ')} cached; a hook that runs \`npx -y ${PACKAGE_NAME} hook\` may keep using it and ignore the pause until \`${NPX} update\` refreshes the cache (a hook pinned to an older version has to be updated itself)`);
+  } catch {
+    // best effort
+  }
+  try {
+    const root = findRoot(cwd, top);
+    for (const h of installedHooks(root)) {
+      const pinned = h.event === 'stop' ? /@aivolution\/isitdone@(\d+\.\d+\.\d+)/.exec(h.command)?.[1] : undefined;
+      if (pinned && isNewer(PAUSE_SINCE, pinned)) found.push(`the ${h.host.displayName} hook in ${h.path} is pinned to isitdone ${pinned}, which ignores pauses; re-run \`${NPX} init\` there and restart its sessions`);
+    }
+    for (const [file, pinned] of pinnedPluginHooks(join(homedir(), '.claude', 'plugins'))) {
+      if (isNewer(PAUSE_SINCE, pinned)) found.push(`the Claude Code plugin copy at ${file} pins isitdone ${pinned}, which ignores pauses; if that plugin is installed, update it (/plugin) and restart its sessions`);
+    }
+    const local = tryReadJsonFile<{ version?: string }>(join(root, 'node_modules', '@aivolution', 'isitdone', 'package.json'))?.version;
+    if (typeof local === 'string' && isNewer(PAUSE_SINCE, local)) found.push(`this project has isitdone ${local} in node_modules, which ignores pauses; \`npm update ${PACKAGE_NAME}\``);
+  } catch {
+    // best effort
+  }
+  return found;
+}
+
+function cmdPause(args: Args): number {
+  const s = styleFor(process.stdout);
+  // The gate is there for the agent; switching it off is the user's call, made in the user's own shell.
+  if (isAgentShell()) {
+    err(`isitdone pause: this is the user's switch, and this shell looks like one an agent host started (a terminal opened from inside an agent's app counts too). If you are the agent: ask the user to run \`${NPX} pause\` in a terminal of their own, and do not try to get around this.`);
+    return 3;
+  }
+  if (args.rest.length > 0) {
+    err(`isitdone pause: unexpected argument${args.rest.length === 1 ? '' : 's'} ${args.rest.map((a) => JSON.stringify(a)).join(' ')} (a length goes after --for; quote a time that has a space: --until "2026-11-02 11:00")`);
+    return 3;
+  }
+  if (args.flags.for === true || args.flags.until === true) {
+    err(`isitdone pause: --${args.flags.for === true ? 'for' : 'until'} needs a value`);
+    return 3;
+  }
+  const forRaw = typeof args.flags.for === 'string' ? args.flags.for : null;
+  const untilRaw = typeof args.flags.until === 'string' ? args.flags.until : null;
+  if (forRaw !== null && untilRaw !== null) {
+    err('isitdone pause: give --for or --until, not both');
+    return 3;
+  }
+  const now = Date.now();
+  let untilMs = now + DEFAULT_PAUSE_MS;
+  if (forRaw !== null) {
+    const d = parseDuration(forRaw);
+    if (d === null) {
+      err(`isitdone pause: --for must look like 30m, 2h, 3d or 1w (got ${forRaw})`);
+      return 3;
+    }
+    untilMs = now + d;
+  } else if (untilRaw !== null) {
+    const u = parseUntil(untilRaw);
+    if (u === null) {
+      err(`isitdone pause: --until must be a real date or time, e.g. 2026-11-02, 2026-11-02T11:00 (local) or 2026-11-02T11:00Z (got ${untilRaw})`);
+      return 3;
+    }
+    if (u <= now) {
+      err(`isitdone pause: ${untilRaw} is already past`);
+      return 3;
+    }
+    untilMs = u;
+  }
+  if (untilMs - now > MAX_PAUSE_MS) {
+    err(`isitdone pause: a pause lasts at most 30 days, and this one would end ${formatPauseTime(untilMs)}; \`${NPX} uninstall\` removes the hook for longer`);
+    return 3;
+  }
+  const cwd = pauseCwd(args.flags);
+  if (!cwd) {
+    err(`isitdone pause: --cwd ${String(args.flags.cwd)} does not exist`);
+    return 3;
+  }
+  const global = args.flags.global === true;
+  const top = gitTopLevel(cwd);
+  if (!global && !top) {
+    err(`isitdone pause: ${cwd} is not inside a git repository; add --global to pause the hook in every repository`);
+    return 3;
+  }
+  let p: ActivePause;
+  try {
+    p = writePause(global ? 'global' : 'repo', cwd, untilMs, VERSION, now, top ?? undefined);
+  } catch (e) {
+    err(`isitdone pause: ${(e as Error).message}`);
+    return 3;
+  }
+  const stale = stalePauseReaders(cwd, top);
+  if (args.flags.json === true) {
+    out(JSON.stringify({ paused: true, scope: p.scope, until: p.until, file: p.file, repository: global ? null : top, notYetInForce: stale }, null, 2));
+    return 0;
+  }
+  out(`${s.bold('isitdone paused')}  ${describePause(p, now)}${global ? '' : s.dim(`  ${top} and its worktrees`)}`);
+  out('  Agents\' stops go through without running the checks, and a check run already going is stopped. Every stop that');
+  out(`  claims to be done says so in the session, on hosts that can show a message. \`${NPX} resume${global ? ' --global' : ''}\` ends it early.`);
+  if (stale.length) for (const w of stale) out(s.yellow(`  not in force yet: ${w}`));
+  else out(`  Hooks running isitdone ${PAUSE_SINCE} or later pick it up at their next stop, in sessions already running too.`);
+  out(s.dim(`  ${p.file}; \`${NPX}\` by hand, the MCP tools and CI still run the checks.`));
+  return 0;
+}
+
+function cmdResume(args: Args): number {
+  const s = styleFor(process.stdout);
+  if (args.rest.length > 0) {
+    err(`isitdone resume: unexpected argument${args.rest.length === 1 ? '' : 's'} ${args.rest.map((a) => JSON.stringify(a)).join(' ')} (--global ends the user-wide pause)`);
+    return 3;
+  }
+  const cwd = pauseCwd(args.flags);
+  if (!cwd) {
+    err(`isitdone resume: --cwd ${String(args.flags.cwd)} does not exist`);
+    return 3;
+  }
+  const global = args.flags.global === true;
+  if (!global && !gitTopLevel(cwd)) {
+    err(`isitdone resume: ${cwd} is not inside a git repository; \`${NPX} resume --global\` ends the user-wide pause`);
+    return 3;
+  }
+  const files = pauseFiles(cwd);
+  let ended: ActivePause | null;
+  try {
+    ended = global ? clearPause(files.global, 'global') : clearPause(files.repo, 'repo');
+  } catch (e) {
+    err(`isitdone resume: ${(e as Error).message}`);
+    return 1;
+  }
+  const still = activePause(pauseFiles(cwd));
+  if (args.flags.json === true) {
+    out(JSON.stringify({ resumed: ended ? { scope: ended.scope, until: ended.until, file: ended.file } : null, stillPaused: still ? { scope: still.scope, until: still.until, file: still.file } : null }, null, 2));
+    return 0;
+  }
+  if (ended) out(`${s.bold('isitdone resumed')}  ${global ? 'the user-wide pause is over' : 'in this repository'}${s.dim(`  (it was to last until ${formatPauseTime(ended.untilMs)})`)}`);
+  else out(`isitdone resume: no ${global ? 'user-wide pause' : 'pause for this repository'} was in force`);
+  if (still) out(s.yellow(`  still paused ${describePause(still)}; \`${NPX} resume${still.scope === 'global' ? ' --global' : ''}\` ends that one`));
+  return 0;
 }
 
 function cmdUpdate(args: Args): number {
@@ -525,6 +717,10 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdHistory(args);
       case 'update':
         return cmdUpdate(args);
+      case 'pause':
+        return cmdPause(args);
+      case 'resume':
+        return cmdResume(args);
       case 'mcp':
         return await cmdMcp(args);
       default:

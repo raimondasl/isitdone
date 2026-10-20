@@ -271,6 +271,23 @@ Limits worth knowing. The records come from the post-edit hook, so ownership is 
 
 Sharing a directory this way is workable, not ideal: a whole-repo check cannot pass while the other session's half of the tree is broken. For long parallel work, give each session its own [git worktree](https://git-scm.com/docs/git-worktree); each gets its own `.isitdone/` and its own receipt.
 
+## Pausing the gate
+
+Sometimes the machine has to stay quiet: a benchmark, a sealed run, a long build elsewhere. A pause switches the Stop hook off for a while and switches it back on by itself. Run it in a terminal of your own:
+
+```
+npx isitdone pause                          # this repository (all its worktrees), for an hour
+npx isitdone pause --for 3h                 # 30m, 3h, 2d, 1w; at most 30 days
+npx isitdone pause --global --until 2026-11-02T11:00Z   # every repository of this user
+npx isitdone resume                         # end this repository's pause early (--global: the user-wide one)
+```
+
+- The hook reads the pause at every stop, and checks for one every few seconds while its checks run: **sessions that are already running pick it up at their next stop, and a check run already under way is stopped** (it writes no receipt). Nothing has to be restarted, as long as the hook runs isitdone 0.9.0 or later: `pause` says when it finds an older copy that a hook may still run (an npx-cached one: `npx isitdone update`; a pinned or installed one: re-run `init`, or `npm update @aivolution/isitdone`, and restart those sessions).
+- While paused, a stop runs nothing and writes nothing new into the project. Every paused stop whose final message claims completion (or might: some hosts do not pass the message), and every pause that cuts a block short, tells the user that the gate is off and until when; a progress stop stays quiet. The message goes to Claude Code, Codex, Gemini CLI, Qwen Code, Factory Droid and Augment (and to Copilot CLI as the allow reason); Cursor, Goose, Devin, OpenCode and Junie have no channel for it, so there only `doctor` and `history` show a pause. Paused stops are logged, and `history` counts them on their own, including turns a pause let go after a block.
+- Only the automatic gate pauses. `npx isitdone` by hand, the MCP tools and the GitHub Action still run the checks, and `npx isitdone` and `doctor` say when the hook is paused.
+- Pauses live outside every project, in `~/.isitdone/pauses/`, so "every repository of this user" means every agent that runs with this home directory: WSL, containers and other accounts have their own. Expired or unreadable pause files are ignored: when in doubt, the gate runs. For longer than 30 days, `npx isitdone uninstall`.
+- **It is your switch, not the agent's.** `pause` refuses to run in a shell that looks like an agent's: Claude Code, Codex, Cursor, Gemini CLI and Qwen Code set variables in the shells they run commands in, and a terminal opened from inside such an app (or Claude Code's `!` prefix) carries them too. That is a speed bump, not a lock: an agent could clear the variables, or write the pause file itself, outside its workspace, as it could edit its own hook settings. What keeps that from going unnoticed is the message on every "done" it claims while paused, `doctor`, and the decision log.
+
 ## CLI
 
 ```
@@ -292,6 +309,8 @@ npx isitdone init [--agent ...]   install the Stop hook (claude | codex | cursor
                                   devin | augment | opencode | junie | all | auto)
 npx isitdone doctor               prove the installed hook blocks; run the checks once on the current tree (--no-baseline skips)
 npx isitdone uninstall            remove the hook(s)
+npx isitdone pause [--for 3h | --until <time>] [--global]
+                                  let agents' stops through unchecked for a while (see "Pausing the gate"); resume [--global] ends it
 npx isitdone mcp                  MCP server on stdio for agents without a stop hook (started by the IDE, see "MCP server")
 ```
 

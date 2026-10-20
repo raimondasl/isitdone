@@ -4,6 +4,16 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-20
+
+### Added
+
+- `isitdone pause` and `isitdone resume`: switch the Stop hook off for a while, in one repository (with all its worktrees) or, with `--global`, for every repository of this user, and have it switch back on by itself (`--for 3h`, `--until 2026-11-02T11:00Z`; default an hour, at most 30 days). The hook reads the pause at every stop and every few seconds while its checks run, so sessions that are already running pick it up without a restart, and a check run already under way is stopped. A paused stop runs nothing and writes nothing new into the project. Every paused stop that claims completion, and every pause that cuts a block short, tells the user so (on hosts that can show a message); paused stops are logged and `history` counts them on their own; `doctor` and `npx isitdone` say when the hook is paused. Only the automatic gate pauses: the CLI, the MCP tools and the GitHub Action still run the checks. Pauses live in `~/.isitdone/pauses/`, outside every project, and `pause` refuses to run in a shell that looks like an agent's; `pause` also warns when a hook may still run an older isitdone that ignores pauses. Asked for by a user whose machine had to stay quiet for a sealed benchmark run, and reviewed adversarially before release: the first design kept the pause file inside the project, where an agent could write it with an ordinary edit.
+
+### Fixed
+
+- The `isitdone` alias depended on `@aivolution/isitdone` at `*`, and an npx cache entry of alias 0.8.2 was found running 0.2.1: `npx isitdone` could run a months-old release. The alias now pins the exact version it was released with, and the release waits until the registry serves that version before publishing the alias. To clear an affected cache: `npx -y @aivolution/isitdone@latest update`.
+
 ## [0.8.2] - 2026-09-27
 
 ### Changed

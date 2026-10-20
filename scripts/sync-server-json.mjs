@@ -3,7 +3,7 @@
 //   node scripts/sync-server-json.mjs --check   exit 1 when anything disagrees (the test suite runs this)
 // Source of truth: package.json "version" and the root SKILL.md. Followers:
 //   server.json                      MCP Registry manifest for `isitdone mcp` (server version and the npm package version)
-//   alias/package.json               the unscoped `isitdone` alias package
+//   alias/package.json               the unscoped `isitdone` alias package (its version, and its exact dependency on this one)
 //   .claude-plugin/plugin.json       Claude Code plugin manifest
 //   .claude-plugin/marketplace.json  the repo's own plugin marketplace entry
 //   hooks/hooks.json                 the plugin's hook commands, pinned to this exact npm version (a plugin at version X runs
@@ -46,6 +46,8 @@ json('server.json', (s) => {
 });
 json('alias/package.json', (a) => {
   a.version = pkg.version;
+  // Exact, never a range: with "*", an npx cache entry of alias 0.8.2 was found running @aivolution/isitdone 0.2.1.
+  a.dependencies = { ...a.dependencies, [pkg.name]: pkg.version };
 });
 json('.claude-plugin/plugin.json', (p) => {
   p.version = pkg.version;

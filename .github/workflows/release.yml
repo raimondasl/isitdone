@@ -60,6 +60,13 @@ jobs:
           if npm view "${NAME}@${VER}" version >/dev/null 2>&1; then
             echo "${NAME}@${VER} is already on npm; skipping"
           else
+            # The alias pins this exact version of the scoped package; publish it only once the registry serves that.
+            DEP="$(node -p "Object.keys(require('./package.json').dependencies)[0]")"
+            for i in $(seq 1 30); do
+              npm view "${DEP}@${VER}" version >/dev/null 2>&1 && break
+              echo "waiting for ${DEP}@${VER} to appear on the registry (${i}/30)"; sleep 10
+            done
+            npm view "${DEP}@${VER}" version >/dev/null 2>&1 || { echo "${DEP}@${VER} never appeared; not publishing an alias that pins it"; exit 1; }
             npm publish --access public
           fi
       - name: GitHub release

@@ -145,7 +145,7 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   }
 
   const waitMs = typeof opts.lockWaitMs === 'function' ? opts.lockWaitMs(wanted) : (opts.lockWaitMs ?? 0);
-  const lock = waitMs > 0 ? await acquireRunLock(root, waitMs, opts.onLockWait) : null;
+  const lock = waitMs > 0 ? await acquireRunLock(root, waitMs, opts.onLockWait, opts.signal) : null;
   const lockInfo = lock ? { waitedMs: lock.waitedMs, held: lock.held, tookOver: lock.tookOver } : undefined;
   try {
     if (lock && lock.waitedMs > 1000) {

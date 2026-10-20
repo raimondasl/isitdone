@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll } from 'vitest';
+import { AGENT_SHELL_MARKERS } from '../src/pause.js';
 
 let fakeHome: string | null = null;
 
@@ -28,6 +29,8 @@ beforeAll(() => {
   delete process.env.ISITDONE;
   delete process.env.ISITDONE_DOCTOR;
   delete process.env.ISITDONE_DEBUG;
+  // The suite is often run by an agent; `isitdone pause` refuses to run in an agent's shell, and tests say when it is one.
+  for (const v of AGENT_SHELL_MARKERS) delete process.env[v];
 });
 
 afterAll(() => {
