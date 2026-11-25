@@ -4,6 +4,12 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-25
+
+### Changed
+
+- The Claude Code plugin's hooks run the plugin's own copy of isitdone, `node "${CLAUDE_PLUGIN_ROOT}/plugin/isitdone.js" hook ...`, instead of `npx -y @aivolution/isitdone@<version> hook ...`: plugin users no longer pay npx's start-up on every stop and every edit (1.7-1.9 s per call measured on Windows, 0.3 s with node). `plugin/isitdone.js` is the release's own bundle, committed with each release; the version sync refuses a plugin bundle that does not run as the package's version. `doctor` fills in `${CLAUDE_PLUGIN_ROOT}` when it probes a plugin hook, as Claude Code does, and for a stale plugin it says to update the plugin.
+
 ## [0.10.0] - 2026-11-25
 
 ### Changed

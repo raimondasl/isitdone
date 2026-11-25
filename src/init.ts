@@ -340,7 +340,7 @@ export function installedHooks(root: string): InstalledHook[] {
  * but doctor has to see them: they run on every stop like any other hook.
  */
 /** A hook doctor found: from a settings file, or (scope plugin) from a Claude Code plugin's hooks/hooks.json. */
-export type FoundHook = Omit<InstalledHook, 'scope'> & { scope: HookScope | 'plugin' };
+export type FoundHook = Omit<InstalledHook, 'scope'> & { scope: HookScope | 'plugin'; /** A plugin's folder: what Claude Code puts in for ${CLAUDE_PLUGIN_ROOT}. */ pluginRoot?: string };
 
 export function pluginHooks(root?: string): FoundHook[] {
   const out: FoundHook[] = [];
@@ -388,9 +388,10 @@ export function pluginHooks(root?: string): FoundHook[] {
       continue;
     }
     const stop = host.registered(settings, 'user');
-    if (stop) out.push({ host, event: 'stop', scope: 'plugin', path, command: stop, timeout: registeredTimeout(settings, stop, host) });
+    const pluginRoot = dirname(dirname(path));
+    if (stop) out.push({ host, event: 'stop', scope: 'plugin', path, command: stop, timeout: registeredTimeout(settings, stop, host), pluginRoot });
     const edit = host.edit?.registered(settings, 'user') ?? null;
-    if (edit) out.push({ host, event: 'edit', scope: 'plugin', path, command: edit, timeout: registeredTimeout(settings, edit, host) });
+    if (edit) out.push({ host, event: 'edit', scope: 'plugin', path, command: edit, timeout: registeredTimeout(settings, edit, host), pluginRoot });
   }
   return out;
 }

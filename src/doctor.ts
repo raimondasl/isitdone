@@ -240,13 +240,14 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
       checks.push({ name: `note:${h.host.name}`, ok: true, detail: `this hook starts isitdone through npx, which adds npm's start-up (about 1-2 s) to every stop and every edit; ${instead}` });
     }
     if (opts.probeHooks ?? true) {
-      const probe = await probeHook(h.command, h.host, root, probeTimeout);
+      // Claude Code writes the plugin's folder into the command before running it; the probe does the same.
+      const probe = await probeHook(h.pluginRoot ? h.command.split('${CLAUDE_PLUGIN_ROOT}').join(h.pluginRoot) : h.command, h.host, root, probeTimeout);
       const verdict = looksBlocked(h.host, probe);
       if (verdict.blocked) {
         const hookVersion = /\[isitdone ([^\]\s]+)\]/.exec(probe.stdout + probe.stderr)?.[1] ?? null;
         checks.push({ name: `probe:${h.host.name}`, ok: true, detail: `synthetic "tests pass" stop was blocked in ${(probe.durationMs / 1000).toFixed(1)}s (${verdict.reason})${hookVersion ? `, hook runs isitdone ${hookVersion}` : ''}` });
         if (hookVersion && hookVersion !== VERSION && isNewer(VERSION, hookVersion)) {
-          checks.push({ name: `stale:${h.host.name}`, ok: false, detail: `the hook runs isitdone ${hookVersion} but this CLI is ${VERSION}`, hint: h.scope === 'plugin' && /@\d+\.\d+\.\d+/.test(h.command) ? `this plugin pins that version in ${h.path}; update the plugin (/plugin) and restart its sessions.` : 'npx caches the hook package separately, and a local copy stays as it is; run `npx isitdone update` to refresh both.' });
+          checks.push({ name: `stale:${h.host.name}`, ok: false, detail: `the hook runs isitdone ${hookVersion} but this CLI is ${VERSION}`, hint: h.scope === 'plugin' ? `the plugin in ${h.pluginRoot ?? h.path} carries that version; update the plugin (/plugin) and restart its sessions.` : 'npx caches the hook package separately, and a local copy stays as it is; run `npx isitdone update` to refresh both.' });
         }
       } else if (probe.timedOut) {
         checks.push({ name: `probe:${h.host.name}`, ok: false, detail: `hook did not answer within ${probeTimeout / 1000}s`, hint: 'first npx run downloads the package; run `npx -y @aivolution/isitdone --version` once, or `npm i -D @aivolution/isitdone` so the hook resolves locally.' });

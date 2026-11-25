@@ -211,6 +211,27 @@ describe('cli end-to-end', () => {
     }
   });
 
+  it('the plugin runs its own bundle through ${CLAUDE_PLUGIN_ROOT}, and doctor proves that hook blocks', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), '.gitignore': '.isitdone/\n' } });
+    const plugin = join(homedir(), '.claude', 'skills', 'isitdone');
+    try {
+      // Laid out as the published plugin is: its hooks.json, and plugin/ with the bundle (here, the test build).
+      mkdirSync(join(plugin, '.claude-plugin'), { recursive: true });
+      writeFileSync(join(plugin, '.claude-plugin', 'plugin.json'), '{"name":"isitdone"}');
+      mkdirSync(join(plugin, 'hooks'));
+      writeFileSync(join(plugin, 'hooks', 'hooks.json'), readFileSync('hooks/hooks.json', 'utf8'));
+      mkdirSync(join(plugin, 'plugin'));
+      writeFileSync(join(plugin, 'plugin', 'isitdone.js'), readFileSync(BUNDLE, 'utf8'));
+      writeFileSync(join(plugin, 'plugin', 'package.json'), readFileSync('plugin/package.json', 'utf8'));
+      const doc = cli(['doctor', '--no-baseline', '--no-latest'], repo.root).stdout;
+      expect(doc).toMatch(/hook:claude\s+Claude Code \(plugin\) .*-> node "\$\{CLAUDE_PLUGIN_ROOT\}\/plugin\/isitdone\.js" hook --host claude/);
+      expect(doc).toMatch(/ok\s+probe:claude\s+synthetic "tests pass" stop was blocked/);
+      expect(doc).not.toMatch(/through npx/);
+    } finally {
+      rmSync(join(homedir(), '.claude'), { recursive: true, force: true });
+    }
+  });
+
   it('init + doctor: installs the hook, proves it blocks, and uninstalls', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
     const r = cli(['init', '--agent', 'claude,codex', '--command', LOCAL_HOOK('claude'), '--no-latest'], repo.root);

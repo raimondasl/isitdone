@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @aivolution/isitdone@0.10.0 hook --host claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/plugin/isitdone.js\" hook --host claude",
             "timeout": 600
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y @aivolution/isitdone@0.10.0 hook --host claude --event edit",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/plugin/isitdone.js\" hook --host claude --event edit",
             "timeout": 30
           }
         ]
