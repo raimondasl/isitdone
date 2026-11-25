@@ -402,7 +402,7 @@ const LOCK_STALE_MS = 30_000;
 const LOCK_DEAD_PID_MS = 2 * LOCK_BEAT_MS + 1_000;
 const LOCK_POLL_MS = 400;
 
-function pidGone(pid: unknown): boolean {
+export function pidGone(pid: unknown): boolean {
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);

@@ -10,10 +10,11 @@ import { appendDecision, type GateKind } from './gatelog.js';
 import { dirtyPathSet, findRoot, gitTopLevel, RECEIPT_DIR, trackedPaths } from './git.js';
 import { getHost, type HookInput, type HostAdapter, type HostName } from './hosts.js';
 import { DEFAULT_HOOK_TIMEOUT_S, HOOK_MARGIN_S } from './init.js';
-import { activePause, describePause, pauseLookup, type ActivePause } from './pause.js';
+import { activePause, describePause, formatSpan, pauseLookup, type ActivePause } from './pause.js';
 import { ensureStateDir } from './receipt.js';
 import { formatBlockReason, integrityBlocks, type OtherSessionNote } from './report.js';
 import { attribute, compactEdits, formatAgo, lastEditAt, LOCK_WAIT_MS, mentionContext, mentions, pruneSessions, recordEdits, recordPass, sessionKey, SESSIONS_DIR, type Attribution } from './sessions.js';
+import { addCutOffNotice, collectCutOffs, startRunMark, takeCutOffNotice } from './runmarks.js';
 import { budgetSeconds, verify, type ResolvedProfile, type VerifyResult } from './verify.js';
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -243,6 +244,9 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
   }
   const maxAttempts = config.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
 
+  // Check runs the host killed since the last stop here (its hook timeout): logged, and told to the user below.
+  if (!doctor) recordCutOffs(root);
+
   const prev = doctor ? null : readState(root, host.name, input.sessionId);
   const continuation = isContinuation(input, prev);
   let attempts = continuation && prev ? prev.attempts : 0;
@@ -339,6 +343,7 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
     : null;
   poll?.unref();
   let result: VerifyResult;
+  const endMark = doctor ? () => {} : startRunMark(root, { host: host.name, session: sessionKey(host.name, input.sessionId), profile });
   try {
     result = await runVerify(!doctor);
     if (result.cached && result.receipt && top !== null && !pauseWatch.signal.aborted) {
@@ -351,6 +356,7 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
     }
   } finally {
     if (poll) clearInterval(poll);
+    endMark();
   }
   if (pausedMidRun && !result.ok) return pausedStop(pausedMidRun, true);
   // "Passed" for other sessions' purposes means the whole tree was proved: a pause that ran only lite checks, or
@@ -382,6 +388,8 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
   const setAside = others && view.integrity && result.integrity ? result.integrity.findings.filter((x) => !x.suppressed).length - view.integrity.findings.filter((x) => !x.suppressed).length : 0;
 
   const notes = [...view.warnings];
+  const cutOffNote = doctor ? null : cutOffMessage(root);
+  if (cutOffNote) notes.push(cutOffNote);
   const lock = result.lock;
   if (lock && lock.waitedMs > 5000) {
     const what = lock.tookOver ? 'for a check run in this directory that never finished (its lock was cleared)' : 'for another check run in this directory';
@@ -443,6 +451,23 @@ async function decideStop(opts: HookOptions, log: StopLog): Promise<HookOutcome>
     attempts,
     kind: 'blocked',
   };
+}
+
+/**
+ * Logs the check runs the host cut off since the last stop here (so `history` counts them even if this stop is cut off
+ * too), and leaves the notice for the user to the first stop that gets as far as saying something.
+ */
+function recordCutOffs(root: string): void {
+  const cut = collectCutOffs(root);
+  for (const c of cut) appendDecision(root, { t: c.startedAt, host: c.host, session: c.session, kind: 'cut-off', claim: null, profile: c.profile, attempts: 0, checks: 0, failed: 0 });
+  addCutOffNotice(root, cut);
+}
+
+function cutOffMessage(root: string): string | null {
+  const n = takeCutOffNotice(root);
+  if (!n) return null;
+  const one = n.count === 1;
+  return `${one ? 'a check run' : `${n.count} check runs`} here stopped answering after ${one ? '' : 'up to '}${formatSpan(n.longestMs)} without finishing, cut off by the host (its hook timeout, or an interrupted turn): nothing was verified, and ${one ? 'that stop' : 'those stops'} went through (\`npx isitdone doctor\` compares the hook's timeout with the checks')`;
 }
 
 interface OtherSessions {

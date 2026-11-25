@@ -20,8 +20,9 @@ const MAX_BYTES = 512 * 1024;
  * one block because the failure named only another session's files. unenforced: failed, but state could not be kept.
  * no-checks: nothing detected to run. paused: background tasks and no claim. error: a broken config.
  * user-paused: the user paused the gate (`isitdone pause`); allowed without running anything.
+ * cut-off: a check run that never finished, most likely killed by the host's hook timeout (logged by the next stop).
  */
-export type GateKind = 'passed' | 'passed-lite' | 'passed-cached' | 'blocked' | 'gave-up' | 'released' | 'unenforced' | 'no-checks' | 'paused' | 'user-paused' | 'error';
+export type GateKind = 'passed' | 'passed-lite' | 'passed-cached' | 'blocked' | 'gave-up' | 'released' | 'unenforced' | 'no-checks' | 'paused' | 'user-paused' | 'cut-off' | 'error';
 
 export interface GateRecord {
   t: string;
@@ -94,6 +95,9 @@ export interface GateSummary {
   /** Stops let through unchecked because the gate was paused, and how many of them ended a blocked turn. */
   pausedStops: number;
   pausedTurns: number;
+  /** Check runs the host cut off before they finished, and how many of them ended a blocked turn. */
+  cutOff: number;
+  cutOffTurns: number;
   other: number;
 }
 
@@ -101,7 +105,7 @@ const PASSED = new Set<GateKind>(['passed', 'passed-lite', 'passed-cached']);
 
 /** Fold decision records (any order, any number of projects) into turns and counts. */
 export function summarizeDecisions(byProject: GateRecord[][]): GateSummary {
-  const s: GateSummary = { projects: 0, checked: 0, passed: 0, blockedTurns: 0, fixed: 0, gaveUp: 0, released: 0, open: 0, claims: 0, claimsBlocked: 0, pausedStops: 0, pausedTurns: 0, other: 0 };
+  const s: GateSummary = { projects: 0, checked: 0, passed: 0, blockedTurns: 0, fixed: 0, gaveUp: 0, released: 0, open: 0, claims: 0, claimsBlocked: 0, pausedStops: 0, pausedTurns: 0, cutOff: 0, cutOffTurns: 0, other: 0 };
   for (const records of byProject) {
     if (records.length === 0) continue;
     s.projects++;
@@ -119,6 +123,7 @@ export function summarizeDecisions(byProject: GateRecord[][]): GateSummary {
         if (PASSED.has(r.kind)) s.passed++;
         // A paused stop was never looked at: it is counted on its own, not among the claims the gate weighed.
         if (r.kind === 'user-paused') s.pausedStops++;
+        else if (r.kind === 'cut-off') s.cutOff++;
         else if (r.claim === true) {
           s.claims++;
           if (r.kind === 'blocked') s.claimsBlocked++;
@@ -133,6 +138,7 @@ export function summarizeDecisions(byProject: GateRecord[][]): GateSummary {
           else if (r.kind === 'gave-up' || r.kind === 'unenforced') s.gaveUp++;
           else if (r.kind === 'released') s.released++;
           else if (r.kind === 'user-paused') s.pausedTurns++;
+          else if (r.kind === 'cut-off') s.cutOffTurns++;
           else s.other++;
           inBlockedTurn = false;
         }

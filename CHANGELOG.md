@@ -4,6 +4,19 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-25
+
+### Changed
+
+- `init --user` registers the hook as `node "~/.isitdone/bin/isitdone.js" hook ...`, a local copy of the single file the package ships, instead of `npx -y @aivolution/isitdone hook ...`. npx adds npm's start-up to every call: measured on Windows, 1.7-1.9 s through npx against 0.3 s with node, and the edit hook runs after every file edit. A user's Claude Code doctor counted about 5,470 edit-hook runs at a typical 1.5 s (2.3 hours of waiting) and 3,480 Stop-hook runs at 1.8 s. A project hook keeps npx by default, since its settings file is usually committed; `--no-npx` and `--npx` override either default. `update` refreshes the local copy, and never moves it to an older version. A hook whose file does not run fails open on most hosts, so a new copy is written beside the old one, run, and renamed into place only once it has answered with the right version; a `package.json` next to it says it is an ES module rather than leave that to Node's guess. A home path that shells would expand (`$`, `%`, `!`, a quote) keeps npx.
+
+### Added
+
+- `doctor` finds the hooks Claude Code loads from plugins: an installed plugin's `hooks/hooks.json` (not one installed for another project, nor one switched off in `enabledPlugins`), or a plugin kept under `~/.claude/skills/` (a folder with a plugin manifest). For a plugin hook its advice names the plugin, not `init` or `update`. Such a hook used to be invisible to it, so its timeout was never checked: in the case that prompted this, the checks were allowed 2,400 s and so was the hook, and Claude Code killed 116 runs at its limit.
+- `doctor`'s timeout check now leaves room for start-up and git (one minute, as `init` does), says plainly what happens when the host's limit comes first (the run is cut off, nothing is verified, the stop goes through), and gives the numbers to fix it with. It also notes when a hook starts isitdone through npx.
+- A check run that never finishes, most likely killed by the host's hook timeout, is no longer invisible. Each Stop-hook run keeps a marker in `.isitdone/runs/` fresh while it runs; the next stop in the project finds a stale one and logs it (`cut-off` in `.isitdone/decisions.jsonl`), and the first stop that gets as far as saying something tells the user (one that is cut off too, or returns early, leaves the notice for the next). `history` counts such runs and the blocked turns they ended.
+- `pause` also warns when the local copy, or a plugin hook kept under `~/.claude/skills/`, is older than 0.9.0 and would ignore the pause.
+
 ## [0.9.0] - 2026-10-20
 
 ### Added

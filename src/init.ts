@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { loadConfig } from './config.js';
 import { detectChecks } from './detect.js';
-import { readJsonFile, stripBom } from './fsutil.js';
+import { readJsonFile, stripBom, tryReadJsonFile } from './fsutil.js';
 import { detectHosts, getHost, HOST_NAMES, hostScopes, type HookScope, type HostAdapter, type HostName } from './hosts.js';
 import { RECEIPT_DIR } from './git.js';
 import { budgetSeconds } from './verify.js';
@@ -329,6 +330,67 @@ export function installedHooks(root: string): InstalledHook[] {
       const edit = host.edit?.registered(settings, scope) ?? null;
       if (edit) out.push({ host, event: 'edit', scope, path, command: edit, timeout: registeredTimeout(settings, edit, host) });
     }
+  }
+  return out;
+}
+
+/**
+ * isitdone hooks that Claude Code loads from plugins rather than settings files: an installed plugin's hooks/hooks.json
+ * (installed_plugins.json names the folders), or a plugin kept under ~/.claude/skills/<name>/. Init never writes these,
+ * but doctor has to see them: they run on every stop like any other hook.
+ */
+/** A hook doctor found: from a settings file, or (scope plugin) from a Claude Code plugin's hooks/hooks.json. */
+export type FoundHook = Omit<InstalledHook, 'scope'> & { scope: HookScope | 'plugin' };
+
+export function pluginHooks(root?: string): FoundHook[] {
+  const out: FoundHook[] = [];
+  let claudeDir: string;
+  try {
+    claudeDir = join(homedir(), '.claude');
+  } catch {
+    return out;
+  }
+  const files = new Set<string>();
+  // A folder under ~/.claude/skills is loaded as a plugin when it carries a plugin manifest.
+  try {
+    for (const e of readdirSync(join(claudeDir, 'skills'), { withFileTypes: true })) {
+      const dir = join(claudeDir, 'skills', e.name);
+      if (e.isDirectory() && existsSync(join(dir, '.claude-plugin', 'plugin.json'))) files.add(join(dir, 'hooks', 'hooks.json'));
+    }
+  } catch {
+    // no skills folder
+  }
+  // Plugins switched off in the user's or this project's settings do not run (later files override earlier ones).
+  const enabled = new Map<string, boolean>();
+  for (const f of [join(claudeDir, 'settings.json'), ...(root ? [join(root, '.claude', 'settings.json'), join(root, '.claude', 'settings.local.json')] : [])]) {
+    const s = tryReadJsonFile<{ enabledPlugins?: Record<string, unknown> }>(f);
+    for (const [id, on] of Object.entries(s?.enabledPlugins ?? {})) if (typeof on === 'boolean') enabled.set(id, on);
+  }
+  const fold = (p: string) => (process.platform === 'win32' || process.platform === 'darwin' ? resolve(p).toLowerCase() : resolve(p));
+  const installed = tryReadJsonFile<{ plugins?: Record<string, unknown> }>(join(claudeDir, 'plugins', 'installed_plugins.json'));
+  for (const [id, entry] of Object.entries(installed?.plugins ?? {})) {
+    if (enabled.get(id) === false) continue;
+    for (const p of Array.isArray(entry) ? entry : [entry]) {
+      const { installPath, projectPath } = (p ?? {}) as { installPath?: unknown; projectPath?: unknown };
+      if (typeof installPath !== 'string') continue;
+      // A plugin installed for one project runs there only.
+      if (typeof projectPath === 'string' && (!root || !(fold(root) + sep).startsWith(fold(projectPath) + sep))) continue;
+      files.add(join(installPath, 'hooks', 'hooks.json'));
+    }
+  }
+  const host = getHost('claude');
+  for (const path of files) {
+    if (!existsSync(path)) continue;
+    let settings: Record<string, unknown>;
+    try {
+      settings = readSettings(path);
+    } catch {
+      continue;
+    }
+    const stop = host.registered(settings, 'user');
+    if (stop) out.push({ host, event: 'stop', scope: 'plugin', path, command: stop, timeout: registeredTimeout(settings, stop, host) });
+    const edit = host.edit?.registered(settings, 'user') ?? null;
+    if (edit) out.push({ host, event: 'edit', scope: 'plugin', path, command: edit, timeout: registeredTimeout(settings, edit, host) });
   }
   return out;
 }

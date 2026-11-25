@@ -9,6 +9,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tryReadJsonFile } from './fsutil.js';
 import { PACKAGE_NAME } from './init.js';
+import { installLocalCopy, localCopyPath, ownBundle } from './localcopy.js';
 import { VERSION } from './version.js';
 
 export const OUR_PACKAGES = [PACKAGE_NAME, 'isitdone'];
@@ -19,6 +20,8 @@ export interface UpdateResult {
   warmed: Array<{ pkg: string; version: string | null; error: string | null }>;
   latest: string | null;
   running: string;
+  /** The local copy that hooks registered with `node` run (~/.isitdone/bin/isitdone.js), when there is one. */
+  localCopy: { path: string; action: string; version: string | null } | null;
 }
 
 function npm(args: string[], timeoutMs = 20_000): { ok: boolean; out: string } {
@@ -69,7 +72,7 @@ export function isNewer(candidate: string, current: string): boolean {
 
 export function runUpdate(opts: { warm?: boolean; cacheDir?: string | null; checkOnly?: boolean } = {}): UpdateResult {
   const cacheDir = opts.cacheDir === undefined ? npmCacheDir() : opts.cacheDir;
-  const result: UpdateResult = { cacheDir, removed: [], warmed: [], latest: latestVersion(), running: VERSION };
+  const result: UpdateResult = { cacheDir, removed: [], warmed: [], latest: latestVersion(), running: VERSION, localCopy: null };
   if (opts.checkOnly) return result;
   if (cacheDir) {
     for (const dir of findNpxEntries(cacheDir)) {
@@ -89,5 +92,24 @@ export function runUpdate(opts: { warm?: boolean; cacheDir?: string | null; chec
       result.warmed.push({ pkg, version, error: r.status === 0 && version ? null : (r.stderr ?? '').trim().split('\n').slice(-1)[0] || 'npx failed' });
     }
   }
+  result.localCopy = refreshLocalCopy(cacheDir);
   return result;
+}
+
+/** Moves an existing local copy up to the newest bundle at hand: a freshly warmed npx copy, or this process's own. */
+function refreshLocalCopy(cacheDir: string | null): UpdateResult['localCopy'] {
+  const path = localCopyPath();
+  if (!path || !existsSync(path)) return null;
+  let best: { file: string; version: string } | null = null;
+  const own = ownBundle();
+  if (own) best = { file: own, version: VERSION };
+  for (const dir of cacheDir ? findNpxEntries(cacheDir) : []) {
+    const pkgDir = join(dir, 'node_modules', '@aivolution', 'isitdone');
+    const version = tryReadJsonFile<{ version?: string }>(join(pkgDir, 'package.json'))?.version;
+    const file = join(pkgDir, 'dist', 'isitdone.js');
+    if (typeof version === 'string' && existsSync(file) && (!best || isNewer(version, best.version))) best = { file, version };
+  }
+  if (!best) return { path, action: 'unchanged', version: null };
+  const r = installLocalCopy(best.file, best.version);
+  return { path, action: r.action, version: r.version };
 }

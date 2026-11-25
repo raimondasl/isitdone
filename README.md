@@ -144,20 +144,22 @@ isitdone doctor  ~/work/demo-app
 
 Claude Code users can also install it as a plugin: `/plugin marketplace add raimondasl/isitdone` then `/plugin install isitdone@isitdone`. Gemini CLI users can install it as an extension: `gemini extensions install https://github.com/raimondasl/isitdone-gemini` ([isitdone-gemini](https://github.com/raimondasl/isitdone-gemini)). A paste-to-agent version of these instructions is in [docs/install.md](docs/install.md). How each of these agents' end-of-turn hooks works (config file, payload, how to block, loop flags) is written up vendor-neutrally in [docs/agent-hooks.md](docs/agent-hooks.md), with the same table as data in [docs/agent-hooks.json](docs/agent-hooks.json).
 
-Add `--user` to install into your user-level settings instead of the project. `npx isitdone uninstall` removes it. Teach the agent to run it itself with `npx skills add raimondasl/isitdone` (the [`SKILL.md`](SKILL.md) is at the repo root).
+Add `--user` to install into your user-level settings instead of the project. A user-level hook runs a local copy of isitdone (`~/.isitdone/bin/isitdone.js`, the single file the package ships) with `node`, rather than going through `npx`, which adds npm's start-up to every stop and every edit: measured on Windows, 1.7-1.9 s per call through npx against 0.3 s with `node`, and the edit hook runs after every file edit. A project hook keeps `npx` by default, because `.claude/settings.json` is usually committed and a path into your home directory would not work for anyone else; `--no-npx` (or `--npx`) overrides either default. `npx isitdone uninstall` removes it. Teach the agent to run it itself with `npx skills add raimondasl/isitdone` (the [`SKILL.md`](SKILL.md) is at the repo root).
 
 The code lives in the [`@aivolution/isitdone`](https://www.npmjs.com/package/@aivolution/isitdone) package; `isitdone` on npm is a short alias with the same command, and installed hooks always call the canonical package. `npm i -D @aivolution/isitdone` makes the hook resolve locally, with no registry lookup and offline.
 
 ## Updating
 
-The hook runs through `npx`, which keeps its own install cache and does not refresh an unpinned package by itself. To move the hook to the latest release:
+A hook that runs through `npx` uses npx's own install cache, which does not refresh an unpinned package by itself; a hook that runs the local copy uses that file until it is replaced. To move either to the latest release:
 
 ```
-npx isitdone update          # clears the cached copies of both packages and re-warms them
+npx isitdone update          # clears the cached copies of both packages, re-warms them, and refreshes the local copy
 npx isitdone update --check  # only reports whether a newer release exists
 ```
 
 `doctor` reports the version the hook actually runs and mentions when a newer release is available. Projects that installed `@aivolution/isitdone` as a dev dependency update it with `npm update @aivolution/isitdone` instead.
+
+`doctor` also finds the hooks Claude Code loads from plugins (an installed plugin, or one kept under `~/.claude/skills/`), and compares each hook's timeout with the longest the checks may take. When the host's limit comes first, it kills the hook mid-run: the wait is wasted, nothing is verified, and the stop goes through. isitdone notices such a run at the next stop in that project, says so, and logs it; `history` counts them. Keep the check timeouts in `.isitdone.json` at least a minute under the hook's.
 
 ## Mid-turn warnings
 

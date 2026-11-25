@@ -174,6 +174,43 @@ describe('cli end-to-end', () => {
     }
   });
 
+  it('init --user runs a local copy with node; a project hook keeps npx; doctor reads plugin hooks and compares timeouts', () => {
+    repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), '.isitdone.json': JSON.stringify({ timeout: 2400 }), '.gitignore': '.isitdone/\n' } });
+    const copy = join(homedir(), '.isitdone', 'bin', 'isitdone.js');
+    const skill = join(homedir(), '.claude', 'skills', 'isitdone');
+    try {
+      const u = cli(['init', '--user', '--agent', 'claude', '--no-doctor'], repo.root);
+      expect(u.code).toBe(0);
+      expect(existsSync(copy)).toBe(true);
+      expect(u.stdout).toMatch(/note: the hook runs .*isitdone\.js \(isitdone 0\.0\.0-test\) with node/);
+      const cmd = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')).hooks.Stop[0].hooks[0].command as string;
+      expect(cmd).toBe(`node "${copy.replace(/\\/g, '/')}" hook --host claude`);
+      // The registered command works when a shell runs it, as the host does.
+      const stop = JSON.stringify({ session_id: 's', cwd: repo.root, hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'Done, all tests pass.' });
+      const viaShell = spawnSync(cmd, { shell: true, input: stop, encoding: 'utf8', cwd: repo.root, env: { ...process.env, NO_COLOR: '1' }, windowsHide: true });
+      expect(JSON.parse(viaShell.stdout).decision).toBe('block');
+      expect(cli(['uninstall', '--user', '--agent', 'claude'], repo.root).code).toBe(0);
+
+      expect(cli(['init', '--agent', 'claude', '--no-doctor'], repo.root).code).toBe(0);
+      expect(readFileSync(join(repo.root, '.claude', 'settings.json'), 'utf8')).toMatch(/"npx -y @aivolution\/isitdone hook --host claude"/);
+      expect(cli(['uninstall', '--agent', 'claude'], repo.root).code).toBe(0);
+
+      // A plugin kept under ~/.claude/skills whose hook gives up at the same 2400 s the test itself may take.
+      mkdirSync(join(skill, 'hooks'), { recursive: true });
+      mkdirSync(join(skill, '.claude-plugin'));
+      writeFileSync(join(skill, '.claude-plugin', 'plugin.json'), '{"name":"isitdone"}');
+      writeFileSync(join(skill, 'hooks', 'hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'npx -y @aivolution/isitdone hook --host claude', timeout: 2400 }] }] } }));
+      const doc = cli(['doctor', '--no-probe', '--no-baseline', '--no-latest'], repo.root).stdout;
+      expect(doc).toMatch(/hook:claude\s+Claude Code \(plugin\) .*hooks\.json -> npx -y @aivolution\/isitdone hook --host claude/);
+      expect(doc).toMatch(/timeout:claude\s+the checks may run for up to 2400s, but Claude Code stops this hook after 2400s: a run that long is cut off, nothing is verified/);
+      expect(doc).toMatch(/add up to at most 2340s, or raise this hook's timeout to 2460s/);
+      expect(doc).toMatch(/this hook starts isitdone through npx/);
+    } finally {
+      rmSync(join(homedir(), '.isitdone'), { recursive: true, force: true });
+      rmSync(join(homedir(), '.claude'), { recursive: true, force: true });
+    }
+  });
+
   it('init + doctor: installs the hook, proves it blocks, and uninstalls', () => {
     repo = tempRepo({ files: { 'package.json': nodePkg({ test: PASS }) } });
     const r = cli(['init', '--agent', 'claude,codex', '--command', LOCAL_HOOK('claude'), '--no-latest'], repo.root);

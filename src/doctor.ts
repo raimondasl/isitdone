@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { detectChecks, type Check } from './detect.js';
 import { loadConfig, type IsitdoneConfig } from './config.js';
 import { gitInfo } from './git.js';
-import { installedHooks } from './init.js';
+import { HOOK_MARGIN_S, installedHooks, pluginHooks, type FoundHook } from './init.js';
 import { HOST_NAMES, type HostAdapter } from './hosts.js';
 import { formatDuration } from './output.js';
 import { activePause, describePause, pauseFiles } from './pause.js';
@@ -215,7 +215,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   }
 
   // hooks
-  const hooks = installedHooks(root);
+  const hooks: FoundHook[] = [...installedHooks(root), ...pluginHooks(root)];
   if (!hooks.some((h) => h.event === 'stop')) {
     checks.push({ name: 'hooks', ok: false, detail: 'no isitdone hook installed', hint: `run \`npx isitdone init\` (add --agent <name>|all for other hosts: ${HOST_NAMES.filter((n) => n !== 'claude').join(', ')}).` });
   }
@@ -226,8 +226,18 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
       continue;
     }
     checks.push({ name: `hook:${h.host.name}`, ok: true, detail: `${h.host.displayName} (${h.scope}) ${h.path} -> ${h.command}` });
-    if (h.timeout !== null && budget > h.timeout) {
-      checks.push({ name: `timeout:${h.host.name}`, ok: false, detail: `hook timeout ${h.timeout}s is smaller than the worst case of the checks (${budget}s)`, hint: 'a hook that overruns is cancelled by the host and the stop is allowed; re-run `init` to resize it, or lower the check timeouts.' });
+    // The checks, plus start-up, git and a possible wait for another run, must end before the host gives up on the hook.
+    if (h.timeout !== null && budget + HOOK_MARGIN_S > h.timeout) {
+      checks.push({
+        name: `timeout:${h.host.name}`,
+        ok: false,
+        detail: `the checks may run for up to ${budget}s, but ${h.host.displayName} stops this hook after ${h.timeout}s: a run that long is cut off, nothing is verified, and the stop goes through`,
+        hint: `lower the check timeouts in .isitdone.json so they add up to at most ${Math.max(0, h.timeout - HOOK_MARGIN_S)}s, or raise this hook's timeout to ${budget + HOOK_MARGIN_S}s (${h.scope === 'plugin' ? h.path : 're-run `init`'}).`,
+      });
+    }
+    if (/(^|[\s"'])npx(\.cmd)?\s/.test(h.command)) {
+      const instead = h.scope === 'plugin' ? "the plugin's hooks.json sets that command; a hook from `npx isitdone init --user` runs a local copy with node instead (then remove the plugin's hook, or the checks run twice)" : '`npx isitdone init --user` (or --no-npx) registers a local copy that runs with node instead';
+      checks.push({ name: `note:${h.host.name}`, ok: true, detail: `this hook starts isitdone through npx, which adds npm's start-up (about 1-2 s) to every stop and every edit; ${instead}` });
     }
     if (opts.probeHooks ?? true) {
       const probe = await probeHook(h.command, h.host, root, probeTimeout);
@@ -236,7 +246,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
         const hookVersion = /\[isitdone ([^\]\s]+)\]/.exec(probe.stdout + probe.stderr)?.[1] ?? null;
         checks.push({ name: `probe:${h.host.name}`, ok: true, detail: `synthetic "tests pass" stop was blocked in ${(probe.durationMs / 1000).toFixed(1)}s (${verdict.reason})${hookVersion ? `, hook runs isitdone ${hookVersion}` : ''}` });
         if (hookVersion && hookVersion !== VERSION && isNewer(VERSION, hookVersion)) {
-          checks.push({ name: `stale:${h.host.name}`, ok: false, detail: `the hook runs isitdone ${hookVersion} but this CLI is ${VERSION}`, hint: 'npx caches the hook package separately; run `npx isitdone update` to refresh it.' });
+          checks.push({ name: `stale:${h.host.name}`, ok: false, detail: `the hook runs isitdone ${hookVersion} but this CLI is ${VERSION}`, hint: h.scope === 'plugin' && /@\d+\.\d+\.\d+/.test(h.command) ? `this plugin pins that version in ${h.path}; update the plugin (/plugin) and restart its sessions.` : 'npx caches the hook package separately, and a local copy stays as it is; run `npx isitdone update` to refresh both.' });
         }
       } else if (probe.timedOut) {
         checks.push({ name: `probe:${h.host.name}`, ok: false, detail: `hook did not answer within ${probeTimeout / 1000}s`, hint: 'first npx run downloads the package; run `npx -y @aivolution/isitdone --version` once, or `npm i -D @aivolution/isitdone` so the hook resolves locally.' });

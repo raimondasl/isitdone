@@ -9,7 +9,7 @@ import { dirtyPathSet, findRoot, gitInfo, gitTopLevel } from './git.js';
 import { activePause, clearPause, DEFAULT_PAUSE_MS, describePause, formatPauseTime, isAgentShell, MAX_PAUSE_MS, parseDuration, parseUntil, pauseFiles, writePause, type ActivePause } from './pause.js';
 import { readStdin, runEditHook, runHook } from './hook.js';
 import { liveSessionsNote, LOCK_WAIT_MS } from './sessions.js';
-import { ensureGitignore, init, installedHooks, PACKAGE_NAME } from './init.js';
+import { ensureGitignore, init, installedHooks, PACKAGE_NAME, pluginHooks } from './init.js';
 import { getHost, HOST_NAMES, type HostName } from './hosts.js';
 import { parseSince, scanHistory, type HistoryReport } from './history.js';
 import { runMcpServer } from './mcp.js';
@@ -18,6 +18,7 @@ import { configHash, evaluateReceipt } from './receipt.js';
 import { formatDetection, formatMarkdown, formatReceiptState, formatReport, formatReportMarkdown, integrityBlocks, receiptStateOf, toJson } from './report.js';
 import { findNpxEntries, isNewer, npmCacheDir, runUpdate } from './update.js';
 import { tryReadJsonFile } from './fsutil.js';
+import { bundleVersion, directCommand, installLocalCopy, localCopyPath, type LocalCopyResult } from './localcopy.js';
 import { verify, timeoutFor } from './verify.js';
 import { VERSION } from './version.js';
 
@@ -69,8 +70,10 @@ Options for init
                           (default: auto = every agent with a settings dir in the repo; comma-separate to name several;
                           opencode gets a plugin file instead of a hook entry, junie is user-level only)
   --user                  install into the user-level settings instead of the project
+  --no-npx, --npx         run the hook from a local copy (~/.isitdone/bin) with node, or through npx; node skips
+                          npm's start-up on every call (default: local copy with --user, npx for a project)
   --timeout <seconds>     hook timeout (default: sized to the detected checks, at least 600)
-  --command "<cmd>"       hook command to register (default: npx -y ${PACKAGE_NAME} hook --host <name>); it must
+  --command "<cmd>"       hook command to register (default: see --npx; npx -y ${PACKAGE_NAME} hook --host <name>); it must
                           forward extra arguments, since the edit hook is the same command plus --event edit
   --remove                uninstall the hook(s)
   --no-edit-hook          only the Stop hook; skip the warn-only hook that runs after each test-file edit
@@ -102,7 +105,7 @@ interface Args {
 }
 
 const VALUE_FLAGS = new Set(['profile', 'claim', 'host', 'agent', 'timeout', 'command', 'cwd', 'base', 'since', 'until', 'exclude', 'min', 'sarif', 'event', 'file', 'report', 'json-file', 'for']);
-const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook', 'baseline', 'global']);
+const BOOL_FLAGS = new Set(['all', 'cache', 'json', 'md', 'user', 'remove', 'doctor', 'probe', 'version', 'help', 'strict', 'ci', 'verbose', 'include-subagents', 'check', 'warm', 'latest', 'edit-hook', 'baseline', 'global', 'npx']);
 /** Flags that may repeat; collected as arrays. */
 const MULTI_FLAGS = new Set(['exclude']);
 
@@ -284,7 +287,8 @@ async function cmdHistory(args: Args): Promise<number> {
     if (g) {
       out('');
       out(`  ${s.bold('gate')}  the isitdone Stop hook decided ${g.checked} stop${g.checked === 1 ? '' : 's'} in ${g.projects} project${g.projects === 1 ? '' : 's'} ${s.dim('(.isitdone/decisions.jsonl)')}`);
-      out(`        ${g.passed} passed; ${g.blockedTurns} turn${g.blockedTurns === 1 ? '' : 's'} blocked: ${g.fixed} fixed and then passed, ${g.gaveUp} gave up after the cap, ${g.released} released${g.pausedTurns ? `, ${g.pausedTurns} let go by a pause` : ''}${g.open ? `, ${g.open} still open` : ''}`);
+      out(`        ${g.passed} passed; ${g.blockedTurns} turn${g.blockedTurns === 1 ? '' : 's'} blocked: ${g.fixed} fixed and then passed, ${g.gaveUp} gave up after the cap, ${g.released} released${g.pausedTurns ? `, ${g.pausedTurns} let go by a pause` : ''}${g.cutOffTurns ? `, ${g.cutOffTurns} cut off by the host` : ''}${g.open ? `, ${g.open} still open` : ''}`);
+      if (g.cutOff) out(`        ${s.yellow(`${g.cutOff} check run${g.cutOff === 1 ? '' : 's'} never finished, cut off by the host (its hook timeout, or an interrupted turn): nothing was verified`)} ${s.dim('(`npx isitdone doctor` compares the timeouts)')}`);
       if (g.claims) out(`        ${g.claims} stop${g.claims === 1 ? '' : 's'} claimed done; ${g.claimsBlocked} of them ${g.claimsBlocked === 1 ? 'was' : 'were'} refused (${pct(g.claimsBlocked, g.claims)})`);
       if (g.pausedStops) out(`        ${g.pausedStops} stop${g.pausedStops === 1 ? ' was' : 's were'} let through unchecked while the gate was paused (\`isitdone pause\`)`);
       out(`        ${s.dim('transcripts only show the tests the agent ran itself; the hook\'s own runs in these projects are counted here, not above')}`);
@@ -397,15 +401,26 @@ async function cmdInit(args: Args): Promise<number> {
   }
   const remove = args.flags.remove === true;
   const command = typeof args.flags.command === 'string' ? args.flags.command : undefined;
+  const scope = args.flags.user === true ? 'user' : 'project';
+  // npx costs every hook call npm's start-up. A user-level hook runs a local copy with node instead; a project hook keeps
+  // npx by default, because its settings file is usually committed and a path into this home would break for others.
+  const useNpx = typeof args.flags.npx === 'boolean' ? args.flags.npx : scope === 'project';
+  let hookCommand: ((h: { name: string }) => string) | undefined = command ? () => command : undefined;
+  let localCopy: LocalCopyResult | null = null;
+  if (!command && !useNpx && !remove) {
+    localCopy = installLocalCopy();
+    const path = localCopy.action === 'unavailable' ? null : localCopy.path;
+    if (path) hookCommand = (h) => directCommand(path, h.name);
+  }
   let results;
   try {
     results = init({
       root,
       hosts,
-      scope: args.flags.user === true ? 'user' : 'project',
+      scope,
       timeout,
       remove,
-      command: command ? () => command : undefined,
+      command: hookCommand,
       editHook: args.flags['edit-hook'] !== false,
     });
   } catch (e) {
@@ -420,7 +435,7 @@ async function cmdInit(args: Args): Promise<number> {
 
   if (json) {
     const report = !remove && args.flags.doctor !== false ? await doctor({ root, probeHooks: args.flags.probe !== false, checkLatest: args.flags.latest !== false, baseline: args.flags.baseline !== false }) : null;
-    out(JSON.stringify({ root, hooks: results, detected: d.checks, notes: d.notes, gitignore: gi, doctor: report }, null, 2));
+    out(JSON.stringify({ root, hooks: results, detected: d.checks, notes: d.notes, gitignore: gi, localCopy, doctor: report }, null, 2));
     return report ? (report.ok ? 0 : 1) : 0;
   }
 
@@ -439,6 +454,11 @@ async function cmdInit(args: Args): Promise<number> {
   }
   const notes = results.filter((r) => r.note && r.action !== 'removed' && r.action !== 'absent');
   for (const r of notes) out(`  ${s.dim('note:')} ${r.note}`);
+  if (localCopy?.action === 'unavailable') out(`  ${s.yellow('note:')} the hook runs through npx after all: ${localCopy.note}`);
+  else if (localCopy) {
+    out(`  ${s.dim('note:')} the hook runs ${localCopy.path} (isitdone ${localCopy.version}) with node, which skips npx's start-up on every call; \`${NPX} update\` refreshes that copy`);
+    if (scope === 'project') out(`  ${s.yellow('note:')} the project settings now hold a path into your home directory; keep them out of git, or re-run init with --npx`);
+  }
 
   if (!remove && args.flags.doctor !== false) {
     out('');
@@ -529,6 +549,13 @@ function stalePauseReaders(cwd: string, top: string | null): string[] {
       const pinned = h.event === 'stop' ? /@aivolution\/isitdone@(\d+\.\d+\.\d+)/.exec(h.command)?.[1] : undefined;
       if (pinned && isNewer(PAUSE_SINCE, pinned)) found.push(`the ${h.host.displayName} hook in ${h.path} is pinned to isitdone ${pinned}, which ignores pauses; re-run \`${NPX} init\` there and restart its sessions`);
     }
+    for (const h of pluginHooks(root)) {
+      const pinned = h.event === 'stop' ? /@aivolution\/isitdone@(\d+\.\d+\.\d+)/.exec(h.command)?.[1] : undefined;
+      if (pinned && isNewer(PAUSE_SINCE, pinned)) found.push(`the Claude Code plugin hook in ${h.path} is pinned to isitdone ${pinned}, which ignores pauses; update the plugin and restart its sessions`);
+    }
+    const copy = localCopyPath();
+    const copyVersion = copy && existsSync(copy) ? bundleVersion(copy) : null;
+    if (copyVersion && isNewer(PAUSE_SINCE, copyVersion)) found.push(`the local copy ${copy} is isitdone ${copyVersion}, which ignores pauses; \`${NPX} update\` refreshes it`);
     for (const [file, pinned] of pinnedPluginHooks(join(homedir(), '.claude', 'plugins'))) {
       if (isNewer(PAUSE_SINCE, pinned)) found.push(`the Claude Code plugin copy at ${file} pins isitdone ${pinned}, which ignores pauses; if that plugin is installed, update it (/plugin) and restart its sessions`);
     }
@@ -671,8 +698,9 @@ function cmdUpdate(args: Args): number {
   if (r.removed.length === 0) out(`  ${s.dim('no cached npx copies found')}${r.cacheDir ? s.dim(` under ${r.cacheDir}`) : ''}`);
   for (const d of r.removed) out(`  removed    ${s.dim(d)}`);
   for (const w of r.warmed) out(`  ${w.version ? s.green('warmed ') : s.red('failed ')}    ${w.pkg.padEnd(24)} ${w.version ?? ''}${w.error ? s.dim('  ' + w.error) : ''}`);
+  if (r.localCopy) out(`  local copy ${s.dim(r.localCopy.path)}  ${r.localCopy.action === 'updated' || r.localCopy.action === 'installed' ? s.green(`now ${r.localCopy.version}`) : r.localCopy.action === 'unchanged' ? `already ${r.localCopy.version ?? 'current'}` : s.red('could not be refreshed')}`);
   out(`  ${s.dim('hooks that run `npx -y ' + PACKAGE_NAME + ' hook ...` now use the refreshed copy; `npm i -D ' + PACKAGE_NAME + '` projects should run `npm update ' + PACKAGE_NAME + '`.')}`);
-  return r.warmed.some((w) => w.error) ? 1 : 0;
+  return r.warmed.some((w) => w.error) || r.localCopy?.action === 'unavailable' ? 1 : 0;
 }
 
 export async function main(argv: string[]): Promise<number> {
