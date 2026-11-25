@@ -129,7 +129,8 @@ describe('check runs the host cut off', () => {
     const started = Date.now() - 41 * 60_000;
     const stale = join(dir, 'claude-old-999997.json');
     writeFileSync(stale, JSON.stringify({ pid: 999997, host: 'claude', session: 'claude-old', profile: 'full', startedAt: new Date(started).toISOString() }));
-    const beat = new Date(started + 40 * 60_000);
+    // Half a minute over: file systems may store the time a few ms early, and the message rounds down.
+    const beat = new Date(started + 40.5 * 60_000);
     utimesSync(stale, beat, beat);
     const o = await runHook({ host: 'claude', stdin: JSON.stringify({ session_id: 's1', cwd: r.root, hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'Done, all tests pass.' }) });
     expect(o.decision).toBe('block');
