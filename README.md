@@ -327,8 +327,9 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
   "checks": {
     "test": "npm run test:unit",                    // replace a detected command
     "lint": false,                                  // disable one
-    "e2e": { "cmd": "playwright test", "kind": "full", "timeout": 600 },  // add one
-    "smoke": { "cmd": "./smoke.sh", "kind": "lite" }
+    "e2e": { "cmd": "playwright test", "kind": "full", "timeout": 600, "ignore": ["/docs/", "*.md"] },  // add one
+    "smoke": { "cmd": "./smoke.sh", "kind": "lite" },
+    "typecheck": { "timeout": 300 }                 // no cmd: adjust the detected check, keep its command
   },
   "profile": "claim-gated",   // claim-gated (default) | lite | full
   "timeout": 120,             // seconds per full check
@@ -342,7 +343,21 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 }
 ```
 
-`kind: "lite"` checks run on every stop; `kind: "full"` checks run when the agent claims completion. `test` and `build` default to full, `typecheck`, `lint`, `check` and `vet` default to lite.
+`kind: "lite"` checks run on every stop; `kind: "full"` checks run when the agent claims completion. `test` and `build` default to full, `typecheck`, `lint`, `check` and `vet` default to lite. An entry without `cmd` changes the detected check of that id (its `kind`, `timeout`, `cwd` or `ignore`) and keeps its command; if no check of that id is detected, it is noted and does nothing.
+
+### Slow checks: skip them while only unrelated files change
+
+A receipt is bound to the whole working tree, so editing a README re-runs a 40-minute suite. A check can list the paths it never reads:
+
+```json
+{ "checks": { "test": { "ignore": ["results/**", "/drafts/", "/docs/", "*.md"] } } }
+```
+
+When that check passes, isitdone remembers the hash of every *other* file (in `.isitdone/passes.json`, signed like the receipt). While git sees those files unchanged, the check would see what it saw then, so its pass is reused instead of running it again: the report says `reused the pass from <time>: none of its inputs changed since`, the receipt still says PASS, and any change outside the list runs it as before. A pass is recorded only when the check's inputs were the same at the end of the run as at the start, so a check that writes files git does not ignore (coverage, generated code) needs those in its list or in `.gitignore` before it can be reused.
+
+Patterns are relative to the project root and close to `.gitignore`, without `!`. A pattern with no slash matches a name at any depth (`*.md`, `__pycache__`). A pattern with a slash anywhere is anchored at the project root (`results/**`, `/PLAN.md`, and also `docs/`, which unlike in `.gitignore` means only the top-level `docs`; write `**/docs/` for every directory of that name). A trailing slash means a directory. Wherever these rules could be read two ways, they match less, which only costs a run. Some files are inputs whatever the list says: files in the repository outside the project root, and a fixed list of files that define how checks run (manifests and lockfiles such as `package.json` and `uv.lock`, `tsconfig*.json`, `*.config.*` and `*rc` files, `.gitignore`, build files, CI workflows). That list cannot know every tool, so keep configuration out of your patterns rather than rely on it. A list that cannot be used (a `!` pattern, one made only of wildcards like `**`, an invalid character class) is dropped with a note, and the check runs every time.
+
+List only what the check really never reads. A test that reads `PLAN.md` makes `*.md` wrong, and committed data that tests compare against (results, fixtures, golden files) is an input too. Nothing can detect that for you, so when in doubt leave the path out (it only costs a run). If only part of a suite reads such files, split it into two checks and give the other part the list. Files ignored by git are not part of any hash, as before, and like the receipt's the hash is of the content git would store, so where git normalizes line endings (`core.autocrlf`, a `text` attribute) a line-ending-only change does not count. `npx isitdone --no-cache` runs everything regardless.
 
 ## What it is not
 
@@ -363,7 +378,8 @@ Optional. `.isitdone.json` at the repo root, or an `"isitdone"` key in `package.
 
 ## Roadmap
 
-- **v0.5** A `--related` mode that runs only the tests touching the changed files for slow suites; Cline (a PreToolUse gate on `attempt_completion`) and Amp (`agent.end` plugin) adapters; a native OpenCode hook once `session.stopping` ships, and Windsurf/Cascade once its hooks can block; `history` for OpenCode's database; Kotest/Spek DSLs; a detector for expected values bent to match a regression.
+- **Next** Long suites without a long stop: the stop gate runs the fast checks, the full suite runs as a background hook that wakes the agent if it fails (Claude Code's `asyncRewake`), and the receipt stays PENDING until it finishes; selecting only the tests a change touches (`--related`) as a fast first pass inside it, never as proof.
+- **Later** Cline (a PreToolUse gate on `attempt_completion`) and Amp (`agent.end` plugin) adapters; a native OpenCode hook once `session.stopping` ships, and Windsurf/Cascade once its hooks can block; `history` for OpenCode's database; Kotest/Spek DSLs; a detector for expected values bent to match a regression.
 - No hook adapter planned: Roo Code and Kilo Code (no hooks), Kiro (its Stop trigger cannot block), Crush (PreToolUse only); they are served by the [MCP server](#mcp-server) instead. Aider has no hooks but `aider --auto-test --test-cmd "npx isitdone"` feeds the same verdict back after every edit.
 
 ## Development

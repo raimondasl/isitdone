@@ -4,6 +4,7 @@ import { detectChecks, type Check, type Detection } from './detect.js';
 import { collectDiff, readAtBase, readNow } from './diff.js';
 import { existingPathsChanged, gitInfo, type GitInfo } from './git.js';
 import { scanIntegrity, type IntegrityReport } from './integrity.js';
+import { readPasses, reusablePass, reusedResult, updatePasses, type PassRecord } from './passes.js';
 import { configHash, evaluateReceipt, writeReceipt, type Receipt, type ReceiptEvaluation } from './receipt.js';
 import { childEnv, runCheck, type RunResult } from './run.js';
 import { acquireRunLock, editsSince } from './sessions.js';
@@ -118,8 +119,15 @@ export function receiptSatisfies(evaluation: ReceiptEvaluation, profile: Resolve
 export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
   const started = Date.now();
   const root = opts.root;
-  let git = gitInfo(root);
   const detection = detectChecks(root, opts.config);
+  // Checks that declare what they never read get an input hash, taken from the same snapshot as the tree hash.
+  const scoped = detection.checks.filter((c) => c.ignore !== undefined && c.ignore.length > 0);
+  const ignoreSets = scoped.map((c) => c.ignore as string[]);
+  const inputsOf = (g: GitInfo, id: string): string | null => {
+    const i = scoped.findIndex((c) => c.id === id);
+    return i >= 0 ? (g.inputs?.[i] ?? null) : null;
+  };
+  let git = gitInfo(root, ignoreSets);
   const ch = configHash(root);
   const before = evaluateReceipt(root, git, ch);
   const claim = opts.claim ?? null;
@@ -144,7 +152,24 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     return { ...base, ok: true, ran: [], skipped, receipt: null, cached: false, durationMs: Date.now() - started };
   }
 
-  const waitMs = typeof opts.lockWaitMs === 'function' ? opts.lockWaitMs(wanted) : (opts.lockWaitMs ?? 0);
+  // A check whose inputs are exactly those a recorded pass started on (and still had when it finished) would see what
+  // that run saw: reuse that pass.
+  const mayReuse = (opts.useCache ?? true) && !opts.dryRun && scoped.length > 0;
+  const reusable = (g: GitInfo): Map<string, PassRecord> => {
+    const out = new Map<string, PassRecord>();
+    if (!mayReuse) return out;
+    const passes = readPasses(root);
+    for (const c of wanted) {
+      const rec = reusablePass(passes[c.id], c, ch, inputsOf(g, c.id));
+      if (rec) out.set(c.id, rec);
+    }
+    return out;
+  };
+  let reuse = reusable(git);
+  // With nothing to run there is nothing to serialise. Otherwise the wait is sized for every wanted check, as before:
+  // the run waited for may fail and revoke a pass this run expected to reuse.
+  const nothingToRun = wanted.every((c) => reuse.has(c.id));
+  const waitMs = nothingToRun ? 0 : typeof opts.lockWaitMs === 'function' ? opts.lockWaitMs(wanted) : (opts.lockWaitMs ?? 0);
   const lock = waitMs > 0 ? await acquireRunLock(root, waitMs, opts.onLockWait, opts.signal) : null;
   const lockInfo = lock ? { waitedMs: lock.waitedMs, held: lock.held, tookOver: lock.tookOver } : undefined;
   try {
@@ -152,12 +177,14 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       // Time passed: the tree may have moved on, and the run we waited for may have proved this exact tree. Its PASS
       // counts only if it STARTED on this tree: a receipt is bound to the tree after the run, and our own last edits
       // may have landed while that run was already reading the files.
-      git = gitInfo(root);
+      git = gitInfo(root, ignoreSets);
       const again = evaluateReceipt(root, git, ch);
       base = { ...base, git, before: again };
       if ((opts.useCache ?? true) && receiptSatisfies(again, opts.profile) && again.receipt?.treeBefore === git.tree) {
         return { ...base, ok: true, ran: [], skipped: [], receipt: again.receipt, cached: true, durationMs: Date.now() - started, lock: lockInfo };
       }
+      // ...and the run we waited for may have recorded passes for the inputs as they are now.
+      reuse = reusable(git);
     }
 
     const runStarted = Date.now();
@@ -171,6 +198,11 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
       }
       if (check.kind === 'full' && liteFailed && !opts.all) {
         skipped.push({ check, reason: 'skipped because a lite check failed (use --all to run anyway)' });
+        continue;
+      }
+      const prior = reuse.get(check.id);
+      if (prior) {
+        ran.push(reusedResult(check, prior, timeoutFor(check, opts.config)));
         continue;
       }
       opts.onCheckStart?.(check);
@@ -196,13 +228,57 @@ export async function verify(opts: VerifyOptions): Promise<VerifyResult> {
     if (!opts.dryRun && !cancelled) {
       // Checks may write files (coverage, build output). Bind the receipt to the tree as it is now,
       // and remember the pre-run tree so either matches on the next stop.
-      let after = git.isRepo ? gitInfo(root) : git;
+      const now = git.isRepo ? gitInfo(root, ignoreSets) : git;
+      let after = now;
       // ...unless files were edited while the checks ran (a session recorded an edit, or a path that already existed
       // was modified or deleted, which checks rarely do): then the difference is not just the checks' own output,
       // nothing proves the tree as it is now, and the receipt stands for the tree the run started on.
-      if (after.tree !== git.tree && (editsSince([git.root, root], runStarted) || existingPathsChanged(git.root, git.tree, after.tree))) {
+      // An agent session recorded an edit since the run started (even one undone before it ended).
+      const sessionEdits = git.isRepo && editsSince([git.root, root], runStarted);
+      const editedMidRun = now.tree !== git.tree && (sessionEdits || existingPathsChanged(git.root, git.tree, now.tree));
+      if (editedMidRun) {
         warnings.push('files changed while the checks ran; the receipt covers the tree the run started on, not the current one');
         after = git;
+      }
+      // A reused pass proves only the inputs it was recorded for: if anything it reads changed during this run (an
+      // addition counts), the receipt cannot stand for the tree as it is now either.
+      if (after !== git && ran.some((r) => r.reused && inputsOf(now, r.id) !== inputsOf(git, r.id))) {
+        warnings.push('files a reused check reads changed during the run; the receipt covers the tree the run started on, not the current one');
+        after = git;
+      }
+      if (scoped.length > 0) {
+        // Remember each scoped check that just passed, bound to the inputs the run started on, and only when those
+        // inputs were still the same when the run ended and no session recorded an edit meanwhile: then whenever the
+        // check read a file, it read what the record says. A check rewriting its own ignored output (results/) does
+        // not stop that; a file it does read changing does. Forget the pass of a check that just failed.
+        const set: Record<string, PassRecord> = {};
+        const drop: string[] = [];
+        for (const r of ran) {
+          const check = scoped.find((c) => c.id === r.id);
+          if (!check || r.reused) continue;
+          const before = inputsOf(git, r.id);
+          if (r.status !== 'PASS' || !before) {
+            drop.push(r.id);
+            continue;
+          }
+          if (sessionEdits || inputsOf(now, r.id) !== before) continue;
+          set[r.id] = {
+            cmd: check.cmd,
+            cwd: check.cwd ?? null,
+            ignore: [...(check.ignore as string[])],
+            configHash: ch,
+            inputs: before,
+            at: new Date(runStarted).toISOString(),
+            tree: git.tree,
+            durationMs: r.durationMs,
+            ...(r.summary ? { summary: r.summary } : {}),
+          };
+        }
+        try {
+          updatePasses(root, set, drop);
+        } catch (err) {
+          warnings.push(`passes could not be recorded: ${(err as Error).message}`);
+        }
       }
       try {
         receipt = writeReceipt(root, {

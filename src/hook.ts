@@ -187,6 +187,7 @@ export async function runHook(opts: HookOptions): Promise<HookOutcome> {
       attempts: outcome.attempts,
       checks: r ? (r.cached ? (r.receipt?.checks.length ?? 0) : r.ran.length) : 0,
       failed: r ? r.ran.filter((x) => x.status !== 'PASS').length : 0,
+      ...(r && !r.cached && r.ran.some((x) => x.reused) ? { reused: r.ran.filter((x) => x.reused).length } : {}),
     }, { create: outcome.kind !== 'user-paused' });
   }
   return outcome;

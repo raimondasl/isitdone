@@ -4,6 +4,12 @@ All notable changes to isitdone are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-25
+
+### Added
+
+- A check can list the paths it never reads, `"checks": { "test": { "ignore": ["results/**", "/docs/", "*.md"] } }`, and while only those change its last pass is reused instead of running it again. A receipt is bound to the whole working tree, so until now a README edit re-ran a 40-minute suite. The pass is bound to the hash of every other file, taken from the same snapshot as the tree hash, and recorded in `.isitdone/passes.json` (signed like the receipt) only when those inputs were the same at the end of the run as at the start and no agent session recorded an edit meanwhile (a check rewriting its own ignored output does not prevent it). A change outside the list, a failure, a different command or check configuration, `--no-cache` and doctor runs all run the check as before; a receipt never covers files a reused check has not seen. A fixed list of manifests, lockfiles, build files and test-runner and linter configuration, plus `.gitignore` and files outside the project root, are inputs whatever the list says. The matcher works segment by segment without regular expressions, so no pattern can make it slow. The report and the receipt mark a reused pass (`reused the pass from <time>: none of its inputs changed since`), and the gate log counts them. Patterns are relative to the project root, close to `.gitignore` without `!`, and match less wherever they could be read two ways: any slash anchors at the root (`docs/` is the top-level one, `**/docs/` reaches all). A list that cannot be used is dropped with a note and the check runs every time, rather than turning the gate off. A `checks` entry without `cmd` now adjusts the detected check of that id (a misspelt key in such an entry is an error).
+
 ## [0.10.1] - 2026-11-25
 
 ### Changed

@@ -96,7 +96,12 @@ function canonical(r: Receipt): string {
 }
 
 function sign(root: string, r: Receipt): string {
-  return createHmac('sha256', loadKey(root)).update(canonical(r)).digest('hex');
+  return signText(root, canonical(r));
+}
+
+/** HMAC of a state file's canonical text with this project's key (receipts, recorded passes). */
+export function signText(root: string, text: string): string {
+  return createHmac('sha256', loadKey(root)).update(text).digest('hex');
 }
 
 /** Hash the files that define what "the checks" are, so a loosened gate is visible in the receipt. */

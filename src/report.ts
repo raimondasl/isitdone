@@ -17,6 +17,7 @@ function colorStatus(s: Style, r: RunResult): string {
 }
 
 function detail(r: RunResult): string {
+  if (r.reused) return `reused the pass from ${r.reused.at.slice(0, 16).replace('T', ' ')} UTC: none of its inputs changed since${r.summary ? ` (${r.summary})` : ''}`;
   if (r.status === 'TIMEOUT') return `killed after ${formatDuration(r.timeoutMs)} (isitdone timeout; raise it in .isitdone.json if the check is legitimately slow)`;
   if (r.summary) return r.summary;
   if (r.status === 'FAIL') return `exit ${r.exitCode ?? '?'}`;
@@ -227,7 +228,7 @@ export function formatReceiptState(ev: ReceiptEvaluation, s: Style, fullRun: str
   if (ev.receipt) {
     const r = ev.receipt;
     lines.push(`  ${s.dim(`created ${r.createdAt} on ${r.branch ?? 'detached'}@${(r.head ?? '').slice(0, 7)} tree ${r.tree.slice(0, 7)}, profile ${r.profile}${r.host ? `, host ${r.host}` : ''}`)}`);
-    for (const c of r.checks) lines.push(`  ${c.cmd}  ${c.status === 'PASS' ? s.green('PASS') : s.red(c.status)}  ${s.dim(formatDuration(c.durationMs))}  ${s.dim(c.summary ?? '')}`.trimEnd());
+    for (const c of r.checks) lines.push(`  ${c.cmd}  ${c.status === 'PASS' ? s.green('PASS') : s.red(c.status)}  ${s.dim(formatDuration(c.durationMs))}  ${s.dim(c.reused ? detail(c) : (c.summary ?? ''))}`.trimEnd());
     if (r.claim) lines.push(`  ${s.dim('claim: ' + JSON.stringify(r.claim))}`);
     if (ev.state === 'PASS' && r.profile === 'lite') lines.push(`  ${s.yellow(`tests were not run; ${fullRun} for a full receipt`)}`);
   }
@@ -238,7 +239,10 @@ export function formatReceiptState(ev: ReceiptEvaluation, s: Style, fullRun: str
 export function formatDetection(root: string, d: Detection, config: IsitdoneConfig, source: string | null, s: Style): string {
   const lines = [`${s.bold('isitdone detect')}  ${s.dim(root)}${source ? s.dim(`  (config: ${source})`) : ''}`];
   if (d.checks.length === 0) lines.push(`  ${s.yellow('no checks detected')}`);
-  for (const c of d.checks) lines.push(`  ${s.cyan(c.id.padEnd(10))} ${c.cmd.padEnd(32)} ${s.dim(`${c.kind}  ${timeoutFor(c, config) / 1000}s  from ${c.source}`)}`);
+  for (const c of d.checks) {
+    lines.push(`  ${s.cyan(c.id.padEnd(10))} ${c.cmd.padEnd(32)} ${s.dim(`${c.kind}  ${timeoutFor(c, config) / 1000}s  from ${c.source}`)}`);
+    if (c.ignore?.length) lines.push(`  ${' '.repeat(10)} ${s.dim(`reuses its last pass while only these change: ${c.ignore.join(', ')}`)}`);
+  }
   for (const n of d.notes) lines.push(`  ${s.dim('note: ' + n)}`);
   return lines.join('\n');
 }
@@ -353,6 +357,7 @@ export function toJson(res: VerifyResult, state: string): Record<string, unknown
       durationMs: r.durationMs,
       summary: r.summary ?? null,
       tail: r.tail,
+      reused: r.reused ?? null,
     })),
     skipped: res.skipped.map((sk) => ({ id: sk.check.id, cmd: sk.check.cmd, reason: sk.reason })),
     integrity: res.integrity

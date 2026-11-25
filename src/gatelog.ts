@@ -37,6 +37,8 @@ export interface GateRecord {
   attempts: number;
   checks: number;
   failed: number;
+  /** Checks whose earlier pass was reused because none of their inputs changed (omitted when none). */
+  reused?: number;
 }
 
 /** With `create: false` the record is written only where .isitdone/ already exists (a paused stop adds nothing new to a project). */

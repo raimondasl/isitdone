@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import type { CheckKind, IsitdoneConfig } from './config.js';
+import { ignoreProblem, type CheckKind, type IsitdoneConfig } from './config.js';
 import { readTextFile, tryReadJsonFile } from './fsutil.js';
 
 export interface Check {
@@ -15,6 +15,8 @@ export interface Check {
   timeout?: number;
   /** Working directory relative to root. */
   cwd?: string;
+  /** Paths (relative to root) this check never reads: a change confined to them reuses its last pass. */
+  ignore?: string[];
 }
 
 export interface Detection {
@@ -421,14 +423,29 @@ function applyConfig(out: Detection, config: IsitdoneConfig): void {
       continue;
     }
     const cfg = typeof value === 'string' ? { cmd: value } : value;
-    const check: Check = {
-      id,
-      cmd: cfg.cmd,
-      kind: cfg.kind ?? (existing >= 0 ? (out.checks[existing] as Check).kind : (KIND_BY_ID[id] ?? 'full')),
-      source: 'config',
-    };
+    const detected = existing >= 0 ? (out.checks[existing] as Check) : null;
+    if (cfg.cmd === undefined && !detected) {
+      out.notes.push(`check "${id}" in config has no "cmd" and no "${id}" check was detected; nothing to apply it to`);
+      continue;
+    }
+    // Without "cmd" the entry adjusts the detected check (e.g. only adds "ignore") instead of replacing it.
+    const check: Check = cfg.cmd === undefined && detected
+      ? { ...detected }
+      : { id, cmd: cfg.cmd as string, kind: detected?.kind ?? KIND_BY_ID[id] ?? 'full', source: 'config' };
+    if (cfg.kind !== undefined) check.kind = cfg.kind;
     if (cfg.timeout !== undefined) check.timeout = cfg.timeout;
     if (cfg.cwd !== undefined) check.cwd = cfg.cwd;
+    if (cfg.ignore !== undefined) {
+      const problem = ignoreProblem(cfg.ignore);
+      if (problem) {
+        delete check.ignore;
+        out.notes.push(`checks.${id}.ignore ${problem}; the list is not used, so "${id}" runs every time until it is fixed`);
+      } else if (cfg.ignore.length > 0) {
+        check.ignore = [...cfg.ignore];
+      } else {
+        delete check.ignore;
+      }
+    }
     if (existing >= 0) out.checks[existing] = check;
     else out.checks.push(check);
   }

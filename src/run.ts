@@ -18,6 +18,11 @@ export interface RunResult {
   lines: number;
   /** A one-line summary extracted from the output when recognisable (e.g. "2 failed, 45 passed"). */
   summary?: string;
+  /**
+   * Not run: an earlier PASS was reused because none of the files this check reads changed since (see "ignore" in
+   * .isitdone.json). When that run started, on which tree, and how long it took.
+   */
+  reused?: { at: string; tree: string; durationMs: number };
 }
 
 export interface RunOptions {

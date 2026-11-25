@@ -137,6 +137,11 @@ const CHECK_RESULT = {
     durationMs: { type: 'number' },
     summary: NULLABLE_STRING,
     tail: { ...STRINGS, description: 'Last lines of the combined output; empty for checks that passed.' },
+    reused: {
+      type: ['object', 'null'],
+      description: 'Set when the check was not run because none of the files it reads changed since an earlier pass (its "ignore" list in .isitdone.json): when that run started, its tree and duration.',
+      properties: { at: STRING, tree: STRING, durationMs: { type: 'number' } },
+    },
   },
   required: ['id', 'cmd', 'status', 'tail'],
 };
@@ -678,7 +683,7 @@ export class McpServer {
           branch: r.branch,
           claim: r.claim,
           host: r.host,
-          checks: r.checks.map((c) => ({ id: c.id, cmd: c.cmd, status: c.status, exitCode: c.exitCode, durationMs: c.durationMs, summary: c.summary ?? null, tail: c.status === 'PASS' ? [] : c.tail.map(clip) })),
+          checks: r.checks.map((c) => ({ id: c.id, cmd: c.cmd, status: c.status, exitCode: c.exitCode, durationMs: c.durationMs, summary: c.summary ?? null, tail: c.status === 'PASS' ? [] : c.tail.map(clip), reused: c.reused ?? null })),
         }
       : null;
     const advice = done ? 'This exact tree is verified.' : 'This tree is not verified. Call isitdone_verify before telling the user the work is complete.';

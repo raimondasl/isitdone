@@ -46,7 +46,7 @@ Usage
 Options for run
   --profile <lite|full>   lite = typecheck+lint only, full = everything (default: full)
   --all                   keep running full checks even if a lite check failed
-  --no-cache              re-run even if a PASS receipt exists for this exact tree
+  --no-cache              re-run even if a PASS receipt exists for this exact tree (or a check's pass could be reused)
   --json                  machine-readable output (done: true|false)
   --claim "<text>"        record the completion claim being verified
   --base <ref>            diff against <ref> for the test-integrity scan (default: HEAD)

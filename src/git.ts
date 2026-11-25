@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { ignoreMatcher } from './ignore.js';
 
 export interface GitInfo {
   isRepo: boolean;
@@ -19,6 +20,11 @@ export interface GitInfo {
   dirtyFiles: number;
   /** Paths (up to 20) that are dirty, for display. */
   dirtyPaths: string[];
+  /**
+   * When asked for (gitInfo's `ignoreSets`): per set of ignore patterns, the hash of every file of the same snapshot
+   * except the ignored ones; null when it cannot be told or nothing is left.
+   */
+  inputs?: Array<string | null>;
 }
 
 export const RECEIPT_DIR = '.isitdone';
@@ -76,7 +82,7 @@ export function gitTopLevel(cwd: string): string | null {
  * and without writing any blob into .git/objects (secrets in untracked files never enter the object store).
  * Uses a temporary index seeded from the real one so unchanged files are not re-hashed.
  */
-export function workingTreeHash(top: string, depth = 0): { tree: string | null; error: string | null } {
+export function workingTreeHash(top: string, depth = 0, ignored: Array<(path: string) => boolean> = []): { tree: string | null; error: string | null; inputs?: Array<string | null> } {
   const tmp = join(tmpdir(), `isitdone-index-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const env = { GIT_INDEX_FILE: tmp };
   try {
@@ -116,21 +122,51 @@ export function workingTreeHash(top: string, depth = 0): { tree: string | null; 
     const wt = git(['write-tree', '--missing-ok'], top, env);
     if (!wt.ok) return { tree: null, error: `git write-tree failed: ${wt.stderr}` };
     const inner = [...gitlinks, ...nested].sort();
-    if (inner.length === 0) return { tree: wt.stdout.trim(), error: null };
-    const h = createHash('sha1').update(wt.stdout.trim());
-    for (const path of inner) {
-      const dir = resolve(top, path);
-      // Recurse only into a real repository below top. A gitlink whose directory is missing or not initialised (a plain
-      // clone, actions/checkout by default) contributes the commit it records; "./" would be top itself, never a child.
-      if (depth >= 8 || dir === top || !dir.startsWith(top) || !existsSync(join(dir, '.git'))) {
-        h.update('\0').update(path).update('\0').update(gitlinkSha.get(path) ?? 'missing');
-        continue;
+    // What each submodule / embedded repository contributes: its own working tree, or the commit the index records.
+    const innerHash = new Map<string, string>();
+    let tree = wt.stdout.trim();
+    if (inner.length > 0) {
+      const h = createHash('sha1').update(tree);
+      for (const path of inner) {
+        const dir = resolve(top, path);
+        // Recurse only into a real repository below top. A gitlink whose directory is missing or not initialised (a plain
+        // clone, actions/checkout by default) contributes the commit it records; "./" would be top itself, never a child.
+        let contribution: string;
+        if (depth >= 8 || dir === top || !dir.startsWith(top) || !existsSync(join(dir, '.git'))) {
+          contribution = gitlinkSha.get(path) ?? 'missing';
+        } else {
+          const sub = workingTreeHash(dir, depth + 1);
+          if (sub.error) return { tree: null, error: `submodule ${path}: ${sub.error}` };
+          contribution = sub.tree ?? 'unknown';
+        }
+        h.update('\0').update(path).update('\0').update(contribution);
+        innerHash.set(path, contribution);
       }
-      const sub = workingTreeHash(dir, depth + 1);
-      if (sub.error) return { tree: null, error: `submodule ${path}: ${sub.error}` };
-      h.update('\0').update(path).update('\0').update(sub.tree ?? 'unknown');
+      tree = h.digest('hex');
     }
-    return { tree: h.digest('hex'), error: null };
+    if (ignored.length === 0) return { tree, error: null };
+    // The inputs of each ignore set, read from the same temporary index the tree came from: one snapshot for both.
+    const staged = git(['ls-files', '-s', '-z'], top, env);
+    const entries = staged.ok ? staged.stdout.split('\0').filter((e) => e !== '') : null;
+    const inputs = ignored.map((isIgnored) => {
+      if (!entries) return null;
+      const h = createHash('sha256');
+      let kept = 0;
+      for (const e of entries) {
+        // "<mode> <object> <stage>\t<path>"; submodules are taken from innerHash below, with their working trees.
+        if (e.startsWith('160000 ')) continue;
+        if (isIgnored(e.slice(e.indexOf('\t') + 1))) continue;
+        h.update(e).update('\0');
+        kept++;
+      }
+      for (const [path, contribution] of innerHash) {
+        if (isIgnored(path) || isIgnored(`${path}/`)) continue;
+        h.update('repo\0').update(path).update('\0').update(contribution).update('\0');
+        kept++;
+      }
+      return kept > 0 ? h.digest('hex') : null;
+    });
+    return { tree, error: null, inputs };
   } catch (err) {
     return { tree: null, error: (err as Error).message };
   } finally {
@@ -182,10 +218,28 @@ export function trackedPaths(top: string): string[] {
   return r.ok ? r.stdout.split('\0').filter((p) => p !== '') : [];
 }
 
-export function gitInfo(cwd: string): GitInfo {
+/** `dir` relative to the top-level as a git path prefix ("" or "sub/dir/"); null when it is not inside it. */
+function gitPrefix(top: string, dir: string): string | null {
+  let real = dir;
+  try {
+    real = realpathSync.native(dir);
+  } catch {
+    // keep as given
+  }
+  const rel = relative(top, real);
+  if (rel === '') return '';
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  return rel.split(sep).join('/') + '/';
+}
+
+/**
+ * Repository facts for `cwd`. With `ignoreSets` (lists of ignore patterns relative to `cwd`), also the hash of the
+ * inputs left by each set, from the same snapshot as the tree hash.
+ */
+export function gitInfo(cwd: string, ignoreSets: string[][] = []): GitInfo {
   const top = gitTopLevel(cwd);
   if (!top) {
-    return { isRepo: false, root: cwd, head: null, headShort: null, branch: null, tree: 'nogit', treeError: null, dirtyFiles: 0, dirtyPaths: [] };
+    return { isRepo: false, root: cwd, head: null, headShort: null, branch: null, tree: 'nogit', treeError: null, dirtyFiles: 0, dirtyPaths: [], ...(ignoreSets.length ? { inputs: ignoreSets.map(() => null) } : {}) };
   }
   const head = out(['rev-parse', 'HEAD'], top);
   const branch = out(['rev-parse', '--abbrev-ref', 'HEAD'], top);
@@ -194,7 +248,10 @@ export function gitInfo(cwd: string): GitInfo {
     .split('\n')
     .filter((l) => l.trim() !== '')
     .map((l) => l.slice(3).trim());
-  const { tree, error } = workingTreeHash(top);
+  const prefix = ignoreSets.length ? gitPrefix(top, cwd) : null;
+  // A project root that cannot be placed inside the repository ignores nothing: every file stays an input.
+  const matchers = ignoreSets.map((patterns) => (prefix === null ? () => false : ignoreMatcher(patterns, prefix)));
+  const { tree, error, inputs } = workingTreeHash(top, 0, matchers);
   return {
     isRepo: true,
     root: top,
@@ -205,6 +262,7 @@ export function gitInfo(cwd: string): GitInfo {
     treeError: error,
     dirtyFiles: dirtyPaths.length,
     dirtyPaths: dirtyPaths.slice(0, 20),
+    ...(ignoreSets.length ? { inputs: inputs ?? ignoreSets.map(() => null) } : {}),
   };
 }
 
