@@ -126,7 +126,7 @@ describe('check runs the host cut off', () => {
     const r = (repo = tempRepo({ files: { 'package.json': nodePkg({ test: FAIL }), '.gitignore': '.isitdone/\n' } }));
     const dir = join(r.root, '.isitdone', RUNS_DIR);
     mkdirSync(dir, { recursive: true });
-    const started = Date.now() - 41 * 60_000;
+    const started = Date.now() - 45 * 60_000;
     const stale = join(dir, 'claude-old-999997.json');
     writeFileSync(stale, JSON.stringify({ pid: 999997, host: 'claude', session: 'claude-old', profile: 'full', startedAt: new Date(started).toISOString() }));
     // Half a minute over: file systems may store the time a few ms early, and the message rounds down.
