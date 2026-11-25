@@ -62,11 +62,13 @@ jobs:
           else
             # The alias pins this exact version of the scoped package; publish it only once the registry serves that.
             DEP="$(node -p "Object.keys(require('./package.json').dependencies)[0]")"
-            for i in $(seq 1 30); do
-              npm view "${DEP}@${VER}" version >/dev/null 2>&1 && break
-              echo "waiting for ${DEP}@${VER} to appear on the registry (${i}/30)"; sleep 10
+            # --prefer-online: npm would otherwise answer from the packument it cached a moment ago, before the publish.
+            # npm has taken well over five minutes to serve a new version (0.10.1 did); the step can be re-run after.
+            for i in $(seq 1 60); do
+              npm view "${DEP}@${VER}" version --prefer-online >/dev/null 2>&1 && break
+              echo "waiting for ${DEP}@${VER} to appear on the registry (${i}/60)"; sleep 15
             done
-            npm view "${DEP}@${VER}" version >/dev/null 2>&1 || { echo "${DEP}@${VER} never appeared; not publishing an alias that pins it"; exit 1; }
+            npm view "${DEP}@${VER}" version --prefer-online >/dev/null 2>&1 || { echo "${DEP}@${VER} never appeared; not publishing an alias that pins it (re-run this job once it does)"; exit 1; }
             npm publish --access public
           fi
       - name: GitHub release
